@@ -4,6 +4,8 @@
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p build
+# initramfs должен существовать: в CI его некому собрать заранее
+[ -f build/initramfs.cpio.gz ] || tools/mkinitramfs.sh
 BIN="qemu-system-x86_64"
 EXTRA=""
 if [ -x root/usr/bin/qemu-system-x86_64 ]; then
