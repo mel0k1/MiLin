@@ -49,6 +49,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_close     3
 #define SYS_stat      4
 #define SYS_mmap      9
+#define SYS_munmap    11
 #define SYS_nanosleep 35
 #define SYS_fork      57
 #define SYS_execve    59
@@ -63,7 +64,10 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_umount2   166
 
 #define O_RDWR     2
+#define O_CREAT    0100
+#define O_TRUNC    01000
 #define PROT_READ  1
+#define PROT_WRITE 2
 #define MAP_SHARED 1
 #define MNT_DETACH 2
 
@@ -97,15 +101,19 @@ static void print_str(const char *s) {
     sys3(SYS_write, 1, (long)s, n);
 }
 
-static void print_dec(long v) {
+static void print_dec_n(long v) {
     char buf[24];
     int i = 24;
     int neg = v < 0;
     if (neg) v = -v;
-    buf[--i] = '\n';
     do { buf[--i] = '0' + (v % 10); v /= 10; } while (v);
     if (neg) buf[--i] = '-';
     sys3(SYS_write, 1, (long)(buf + i), 24 - i);
+}
+
+static void print_dec(long v) {
+    print_dec_n(v);
+    sys3(SYS_write, 1, (long)"\n", 1);
 }
 
 static void print_hex(u32 v) {
