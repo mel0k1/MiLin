@@ -12,5 +12,5 @@ static long sys3(long n, long a, long b, long c) {
 
 void _start(void) {
     P("Hello from MiLin! The kernel is alive.\n");
-    for (;;) sys3(34, 0, 0, 0); // pause
+    sys3(60, 0, 0, 0); // exit(0): ядро паникует, qemu с -no-reboot выходит сам
 }

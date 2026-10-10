@@ -14,7 +14,9 @@ else
     cp .config ../configs/milin_defconfig
     echo "configs/milin_defconfig создан"
 fi
-make -j"$(nproc)"
+HOST_ARG=""
+[ -n "$HOSTPKG_CONFIG" ] && HOST_ARG="HOSTPKG_CONFIG=$HOSTPKG_CONFIG"
+make -j"$(nproc)" $HOST_ARG
 mkdir -p ../build
 cp arch/x86/boot/bzImage ../build/bzImage
 echo "ok: ../build/bzImage"
