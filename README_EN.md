@@ -61,7 +61,7 @@ flowchart TB
 | M1 | Baseline boot | real kernel + minimal config + QEMU ✅ |
 | M2 | Config diet | everything optional disabled, bzImage −23% ✅ |
 | M3 | Source carving | physically delete subsystems: tree −92% ✅ |
-| M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers |
+| M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers ✅ |
 | M5 | Microkernel IPC | endpoint→endpoint message passing |
 | M6 | Report | honest before/after metrics |
 
@@ -70,18 +70,22 @@ Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 
 ## Weight-loss progress
 
-| metric | M1 | M2 | M3 | Δ M1→M3 |
-|--------|----|----|----|---------|
-| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | **−22.9%** |
-| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | −12.8% |
-| CONFIG =y | 529 | 460 | 460 | −13.0% |
-| **source tree** | 1.8G | 1.8G | **139 MiB** | **−92%** |
-| files in tree | 94,856 | 94,856 | 12,212 | −87% |
-| .c/.h lines | 37.2M | 37.2M | 3.5M | −91% |
-| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | −28% |
+| metric | M1 | M2 | M3 | M4 | Δ M1→M4 |
+|--------|----|----|----|----|---------|
+| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | 0.94 MiB | −6.2% |
+| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | ~3.7 MiB | see M6 |
+| CONFIG =y | 529 | 460 | 460 | 448 | −15.3% |
+| **source tree** | 1.8G | 1.8G | **139 MiB** | 154 MiB | **−91.4%** |
+| files in tree | 94,856 | 94,856 | 12,212 | 13,054 | −86.2% |
+| .c/.h lines | 37.2M | 37.2M | 3.5M | 4.0M | −89.3% |
+| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | 1.30 s | −21% |
 
 M3 carves the source tree itself (bzImage barely changes — M2 already
-excluded that code from the build). Metrics: `docs/metrics/m3.json`.
+excluded that code from the build). In M4 bzImage grows by +21.6% — this is
+not a diet reversal, it's the price of the server contract: the kernel
+returns not drivers and not filesystems, but the interfaces through which
+userspace controls them (MULTIUSER, the PCI bus, UIO, FUSE, devtmpfs,
+sysfs). Metrics: `docs/metrics/m4.json`.
 
 ## What lives where
 
@@ -104,7 +108,7 @@ inspected, restored or diffed against upstream. The carve, commit by commit:
 git clone https://github.com/mel0k1/MiLin.git && cd MiLin
 git clone --depth 1 -b milin https://github.com/mel0k1/linux.git linux
 TREE_DIR=$PWD/linux tools/build.sh    # build build/bzImage from the carved tree
-tools/run-qemu.sh                     # boot and see the greeting
+tools/run-qemu.sh                     # boot: the supervisor raises servers, FUSE+UIO demo
 ```
 
 Without cloning the tree, `tools/build.sh` builds the baseline from the
@@ -117,10 +121,24 @@ cpio curl qemu-system-x86`. The kernel and all tooling are x86_64.
 ├── tools/            # scripts: build, carve.sh (the knife), fix-dead-refs.py,
 │                     # mkinitramfs, run-qemu, size-report, tree-metrics
 ├── configs/          # milin.config — the kernel config constitution
-├── init/             # userspace /init — the first MiLin process
+├── userspace/        # the /init supervisor and servers: fused (FUSE), uiod (UIO)
 ├── docs/             # roadmap, boot logs, metrics, future report
 └── .github/          # CI: build from the carved tree + QEMU smoke test
 ```
+
+## M4 in a nutshell
+
+After boot the kernel no longer "really" knows filesystems or drivers:
+
+1. the `/init` supervisor mounts devtmpfs and sysfs, binds a PCI device to
+   its userspace driver (`/sys/.../uio_pci_generic/new_id`);
+2. `uiod` — a userspace driver: mmaps BAR0 via `/dev/uio0` and reads a
+   hardware register (qemu pci-testdev);
+3. `fused` — a userspace filesystem: mounts `/mnt` via `/dev/fuse` and
+   answers the kernel's FUSE_INIT/LOOKUP/GETATTR;
+4. a client created with `setuid(1000)` (MULTIUSER is back) reads
+   `/mnt/README` through the FUSE server — uid isolation and the server
+   working together.
 
 ## License
 
