@@ -59,7 +59,7 @@ flowchart TB
 | Stage | Name | Essence |
 |-------|------|---------|
 | M1 | Baseline boot | real kernel + minimal config + QEMU ✅ |
-| M2 | Config diet | disable everything the kernel can live without |
+| M2 | Config diet | everything optional disabled, bzImage −23% ✅ |
 | M3 | Source carving | physically delete subsystems from the tree |
 | M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers |
 | M5 | Microkernel IPC | endpoint→endpoint message passing |
@@ -67,6 +67,18 @@ flowchart TB
 
 Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 (in Russian, auto-translation works fine).
+
+## Weight-loss progress
+
+| metric | M1 | M2 | Δ |
+|--------|----|----|---|
+| bzImage | 1.00 MiB | 0.77 MiB | **−22.9%** |
+| text code | 3.89 MiB | 3.40 MiB | −12.8% |
+| CONFIG =y | 529 | 460 | −13.0% |
+| QEMU boot time | 1.65 s | 1.16 s | −30% |
+
+CI computes the metrics for every commit (`tools/size-report.sh`) —
+check the job summary in Actions.
 
 ## Quick start
 
