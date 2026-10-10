@@ -1,0 +1,10 @@
+/linux-*/
+/build/
+/debs/
+/root/
+*.tar.xz
+*.cpio
+*.cpio.gz
+*.bzImage
+*.log
+!docs/*.log
