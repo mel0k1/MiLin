@@ -6,7 +6,7 @@
 
 [![ci](https://github.com/mel0k1/MiLin/actions/workflows/ci.yml/badge.svg)](https://github.com/mel0k1/MiLin/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
-[![kernel](https://img.shields.io/badge/Linux-7.2.9-orange)](https://kernel.org)
+[![kernel](https://img.shields.io/badge/Linux-7.2--carved-orange)](https://github.com/mel0k1/linux)
 [![arch](https://img.shields.io/badge/arch-x86__64-blueviolet)]()
 
 MiLin is an experiment: we take the real Linux kernel and methodically cut
@@ -60,7 +60,7 @@ flowchart TB
 |-------|------|---------|
 | M1 | Baseline boot | real kernel + minimal config + QEMU ✅ |
 | M2 | Config diet | everything optional disabled, bzImage −23% ✅ |
-| M3 | Source carving | physically delete subsystems from the tree |
+| M3 | Source carving | physically delete subsystems: tree −92% ✅ |
 | M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers |
 | M5 | Microkernel IPC | endpoint→endpoint message passing |
 | M6 | Report | honest before/after metrics |
@@ -70,36 +70,56 @@ Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 
 ## Weight-loss progress
 
-| metric | M1 | M2 | Δ |
-|--------|----|----|---|
-| bzImage | 1.00 MiB | 0.77 MiB | **−22.9%** |
-| text code | 3.89 MiB | 3.40 MiB | −12.8% |
-| CONFIG =y | 529 | 460 | −13.0% |
-| QEMU boot time | 1.65 s | 1.16 s | −30% |
+| metric | M1 | M2 | M3 | Δ M1→M3 |
+|--------|----|----|----|---------|
+| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | **−22.9%** |
+| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | −12.8% |
+| CONFIG =y | 529 | 460 | 460 | −13.0% |
+| **source tree** | 1.8G | 1.8G | **139 MiB** | **−92%** |
+| files in tree | 94,856 | 94,856 | 12,212 | −87% |
+| .c/.h lines | 37.2M | 37.2M | 3.5M | −91% |
+| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | −28% |
 
-CI computes the metrics for every commit (`tools/size-report.sh`) —
-check the job summary in Actions.
+M3 carves the source tree itself (bzImage barely changes — M2 already
+excluded that code from the build). Metrics: `docs/metrics/m3.json`.
+
+## What lives where
+
+| repository | what it is |
+|-------------|---------|
+| [mel0k1/MiLin](https://github.com/mel0k1/MiLin) | the project: tools, config constitution, CI, docs, carve script |
+| [mel0k1/linux](https://github.com/mel0k1/linux) (fork of torvalds/linux) | the carved tree, branch `milin` — v7.2 baseline minus subsystems |
+
+The fork keeps the real Linux history: every carved-out piece can be
+inspected, restored or diffed against upstream. The carve, commit by commit:
+[`arch`](https://github.com/mel0k1/linux/commit/179c7ed22) →
+[`deadtop`](https://github.com/mel0k1/linux/commit/65d2116a0) →
+[`subsys`](https://github.com/mel0k1/linux/commit/80b676285) →
+[`drivers`](https://github.com/mel0k1/linux/commit/2df94c852) →
+[`fs/kernel/tools`](https://github.com/mel0k1/linux/commit/1800ab624).
 
 ## Quick start
 
 ```bash
 git clone https://github.com/mel0k1/MiLin.git && cd MiLin
-tools/fetch-linux.sh   # download Linux sources (~180 MB)
-tools/build.sh         # build build/bzImage
-tools/run-qemu.sh      # boot in QEMU and see the greeting
+git clone --depth 1 -b milin https://github.com/mel0k1/linux.git linux
+TREE_DIR=$PWD/linux tools/build.sh    # build build/bzImage from the carved tree
+tools/run-qemu.sh                     # boot and see the greeting
 ```
 
-Dependencies: `gcc make flex bison bc cpio curl qemu-system-x86`.
-The kernel and all tooling are x86_64.
+Without cloning the tree, `tools/build.sh` builds the baseline from the
+kernel.org tarball (the M1/M2 way). Dependencies: `gcc make flex bison bc
+cpio curl qemu-system-x86`. The kernel and all tooling are x86_64.
 
 ## Repository layout
 
 ```
-├── tools/            # carving scripts: fetch, build, initramfs, qemu
-├── configs/          # milin_defconfig — our kernel configuration
+├── tools/            # scripts: build, carve.sh (the knife), fix-dead-refs.py,
+│                     # mkinitramfs, run-qemu, size-report, tree-metrics
+├── configs/          # milin.config — the kernel config constitution
 ├── init/             # userspace /init — the first MiLin process
-├── docs/             # roadmap, boot logs, future report
-└── .github/          # CI: kernel build + QEMU smoke test
+├── docs/             # roadmap, boot logs, metrics, future report
+└── .github/          # CI: build from the carved tree + QEMU smoke test
 ```
 
 ## License

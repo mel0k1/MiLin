@@ -1,0 +1,18 @@
+{
+  "milestone": "m3",
+  "date": "2026-10-10",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "физическая резня дерева: arch/* кроме x86, Documentation, samples, rust, certs, usr, io_uring, sound, net, block, crypto, ipc, virt/kvm; drivers -> base/tty/char/virtio/firmware/uio/clocksource/rtc; fs -> ядро ВФС + ramfs/fuse; kernel -> без bpf/trace/cgroup/livepatch/power/kexec/gcov; tools -> только машинерия objtool; security -> commoncap+min_addr",
+  "vanilla_v72": {
+    "tree_size": "1.8G",
+    "tree_files": 94856,
+    "tree_loc_c_h": 37164731
+  },
+  "tree_size": "139M",
+  "tree_files": 12212,
+  "tree_loc_c_h": 3501173,
+  "bzImage_bytes": 812032,
+  "bzImage_note": "v7.2 baseline до резни: 793K; прирост ~19K = perf-ядро (в v7.2 PERF_EVENTS без промпта, always-on). Совпадение с M2 (812032, ядро 7.2.9) случайно",
+  "boot_seconds": 1.19,
+  "boot_ok": true
+}
