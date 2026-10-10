@@ -1,0 +1,128 @@
+// MiLin userspace shim: raw syscalls, no libc.
+// общий каркас всех binaries: супервизор и серверы.
+#ifndef MILIN_H
+#define MILIN_H
+
+typedef unsigned long u64;
+typedef long i64;
+typedef unsigned int u32;
+typedef int i32;
+typedef unsigned short u16;
+typedef unsigned char u8;
+
+static long sys3(long n, long a, long b, long c) {
+    long r;
+    __asm__ volatile ("syscall"
+        : "=a"(r)
+        : "a"(n), "D"(a), "S"(b), "d"(c)
+        : "rcx", "r11", "memory");
+    return r;
+}
+
+static long sys5(long n, long a, long b, long c, long d, long e) {
+    long r;
+    register long r10 __asm__("r10") = d;
+    register long r8  __asm__("r8")  = e;
+    __asm__ volatile ("syscall"
+        : "=a"(r)
+        : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8)
+        : "rcx", "r11", "memory");
+    return r;
+}
+
+static long sys6(long n, long a, long b, long c, long d, long e, long f) {
+    long r;
+    register long r10 __asm__("r10") = d;
+    register long r8  __asm__("r8")  = e;
+    register long r9  __asm__("r9")  = f;
+    __asm__ volatile ("syscall"
+        : "=a"(r)
+        : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory");
+    return r;
+}
+
+// --- номера системных вызовов x86_64 ---
+#define SYS_read      0
+#define SYS_write     1
+#define SYS_open      2
+#define SYS_close     3
+#define SYS_stat      4
+#define SYS_mmap      9
+#define SYS_nanosleep 35
+#define SYS_fork      57
+#define SYS_execve    59
+#define SYS_exit      60
+#define SYS_wait4     61
+#define SYS_kill      62
+#define SYS_getuid    102
+#define SYS_setuid    105
+#define SYS_mkdir     83
+#define SYS_mknod     133
+#define SYS_mount     165
+#define SYS_umount2   166
+
+#define O_RDWR     2
+#define PROT_READ  1
+#define MAP_SHARED 1
+#define MNT_DETACH 2
+
+// --- печать ---
+#define P(s) sys3(SYS_write, 1, (long)(s), sizeof(s) - 1)
+
+static void print_str(const char *s) {
+    long n = 0;
+    while (s[n]) n++;
+    sys3(SYS_write, 1, (long)s, n);
+}
+
+static void print_dec(long v) {
+    char buf[24];
+    int i = 24;
+    int neg = v < 0;
+    if (neg) v = -v;
+    buf[--i] = '\n';
+    do { buf[--i] = '0' + (v % 10); v /= 10; } while (v);
+    if (neg) buf[--i] = '-';
+    sys3(SYS_write, 1, (long)(buf + i), 24 - i);
+}
+
+static void print_hex(u32 v) {
+    char buf[12];
+    int i = 12;
+    buf[--i] = '\n';
+    do {
+        int d = v & 15;
+        buf[--i] = d < 10 ? '0' + d : 'a' + d - 10;
+        v >>= 4;
+    } while (v);
+    buf[--i] = 'x';
+    buf[--i] = '0';
+    sys3(SYS_write, 1, (long)(buf + i), 12 - i);
+}
+
+static void print_oct(u32 v) {
+    char buf[16];
+    int i = 16;
+    buf[--i] = '\n';
+    do { buf[--i] = '0' + (v & 7); v >>= 3; } while (v);
+    sys3(SYS_write, 1, (long)(buf + i), 16 - i);
+}
+
+static void sleep_ms(long ms) {
+    struct { long sec; long nsec; } t = { 0, ms * 1000000L };
+    sys3(SYS_nanosleep, (long)&t, 0, 0);
+}
+
+// Точка входа: ядро передаёт управление с rsp, выровненным на 16, и БЕЗ
+// return address, а ABI gcc ожидает rsp%16==8 (адрес возврата в стеке).
+// Без этого trampлина любая movaps в теле ловит general protection fault.
+void milin_main(void) __attribute__((noreturn));
+__attribute__((naked, noreturn)) void _start(void) {
+    __asm__ volatile (
+        "and $-16, %rsp\n"
+        "call milin_main\n"
+        "hlt\n");
+}
+
+#endif
