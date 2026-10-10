@@ -1,0 +1,12 @@
+{
+  "milestone": "m2",
+  "date": "2026-10-10",
+  "kernel": "7.2.9",
+  "note": "strict diet: no input/vt/procfs/sysfs/tmpfs/sysctl/debug/perf/objtool/microcode/vsyscall/ibt, gzip-only initramfs, flatmem, preempt-none, no dma zones",
+  "bzImage_bytes": 812032,
+  "vmlinux_bytes": 10637984,
+  "text_bytes": 3560831,
+  "data_bytes": 1382296,
+  "bss_bytes": 315392,
+  "config_y": 460
+}
