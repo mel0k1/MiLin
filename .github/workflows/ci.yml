@@ -14,16 +14,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # обрезанное дерево: форк mel0k1/linux, ветка milin (M3)
+      - name: checkout carved tree
+        uses: actions/checkout@v4
+        with:
+          repository: mel0k1/linux
+          ref: milin
+          path: linux
+
       - name: deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential flex bison bc cpio libelf-dev qemu-system-x86
 
-      - name: fetch linux
-        run: tools/fetch-linux.sh
-
       - name: build kernel
         run: tools/build.sh
+        env:
+          TREE_DIR: ${{ github.workspace }}/linux
 
       - name: boot test
         run: tools/run-qemu.sh
@@ -32,7 +39,8 @@ jobs:
         if: always()
         run: |
           tools/size-report.sh | tee size-report.md
-          cat size-report.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+          tools/tree-metrics.sh linux build/bzImage | tee tree-metrics.md
+          cat size-report.md tree-metrics.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
 
       - name: artifacts
         if: always()
@@ -42,4 +50,5 @@ jobs:
           path: |
             build/bzImage
             size-report.md
+            tree-metrics.md
           if-no-files-found: ignore
