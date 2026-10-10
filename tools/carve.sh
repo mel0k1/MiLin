@@ -163,7 +163,9 @@ EOF
 # virtio (транспорт будущих userspace-серверов), firmware, uio (M4).
 # clocksource/rtc возвращены после первой попытки: arch/x86 безусловно
 # линкуется с i8253 PIT (clockevent_i8253_*) и CMOS RTC (mc146818_*).
-DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc"
+# M4: pci — шина для userspace-драйверов (uio_pci_generic); video —
+# screen_info_pci.o, на который ссылается vgaarb из drivers/pci.
+DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video"
 step_drivers() {
     say "drivers: оставляю только: $DRIVERS_KEEP"
     for d in "$TREE"/drivers/*/; do
@@ -177,8 +179,10 @@ step_drivers() {
     fix
 }
 
-# --- шаг 5: fs — оставляем ядро ВФС + ramfs (rootfs) + fuse (на M4) ---------
-FS_KEEP="ramfs fuse"
+# --- шаг 5: fs — ядро ВФС + ramfs (rootfs) + fuse + контракт серверов -------
+# M4: iomap (select у FUSE_FS), sysfs+kernfs (discovery-интерфейс серверов:
+# привязка device-id к uio_pci_generic идёт через /sys/bus/.../new_id)
+FS_KEEP="ramfs fuse iomap sysfs kernfs"
 step_fs() {
     say "fs: из подкаталогов оставляю только: $FS_KEEP"
     for d in "$TREE"/fs/*/; do
