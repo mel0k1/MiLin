@@ -1,0 +1,50 @@
+{
+  "milestone": "m5.1",
+  "date": "2026-10-10",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "прокачка IPC до асинхронных очередей в духе HelQueue (Managarm): пары очередей в разделяемой памяти (ramfs-файл + MAP_SHARED + SCM_RIGHTS + unlink), чанки с progress-словом (24 бита длины + флаги DONE/FULL), length-prefixed элементы, zero-copy чтение из общей памяти, будильник futex-словом с битами DATA/SUPPLY (атомарный OR у producer'а, atomic AND у consumer'а, парковка настоящим futex), возврат чанков свободным списком (flow control). creds: SO_PASSCRED/SCM_CREDENTIALS — ядро прикладывает struct ucred к сообщениям; шина ставит флаг на оба конца lane'а до раздачи и пересылает creds серверу в LaneRequest. Шина переписана на poll() — устранена живая блокировка M5 (accept-цикл не принимал REGISTER, пока обслуживал LOOKUP-ретраи клиента)",
+  "kernel_contract_additions": {
+    "CONFIG_FUTEX": "примитив парковки очередей (аналог HelFutex); тянет по imply/select RT_MUTEXES, FUTEX_PI, FUTEX_PRIVATE_HASH",
+    "bzImage_delta": "+8192 байт (1393664 -> 1401856, +0.6%) — цена futex-контракта",
+    "config_y_delta": "+4 (472 -> 476)"
+  },
+  "bzImage_bytes": 1401856,
+  "config_y_count": 476,
+  "boot_seconds": 1.5,
+  "boot_ok": true,
+  "boot_marker": "M5.1 OK + M5 OK",
+  "ipc_bench": {
+    "note": "QEMU 10.0.13 TCG (без KVM), один vCPU, rdtsc; числа — для ОТНОСИТЕЛЬНОГО сравнения транспортов в одинаковых условиях, не абсолютные; n=256 RTT на транспорт, пачка k=64",
+    "seqpacket_rtt_avg_cycles": 297678,
+    "helq_futex_rtt_avg_cycles": 181730,
+    "helq_yield_rtt_avg_cycles": 161177,
+    "helq_enqueue_avg_cycles_per_msg": 5080,
+    "speedup_futex_vs_seqpacket": "1.64x",
+    "speedup_yield_vs_seqpacket": "1.85x",
+    "enqueue_vs_seqpacket_rtt": "58x дешевле постановки сообщения в очередь против полного RTT seqpacket",
+    "runs": [
+      { "seqpacket": 295101, "helq_futex": 182188, "helq_yield": 162755, "enqueue": 5060 },
+      { "seqpacket": 297362, "helq_futex": 189743, "helq_yield": 169164, "enqueue": 8922 },
+      { "seqpacket": 297678, "helq_futex": 181730, "helq_yield": 161177, "enqueue": 5080 }
+    ]
+  },
+  "demo_chain": [
+    "supervisor spawns mlbus (poll event loop) + logsrv + uiod + fused",
+    "logsrv REGISTER(\"log\"); mlbus видит creds сервера (uid 0) через SCM_CREDENTIALS",
+    "client setuid(1000): seqpacket-регрессия M5: LOOKUP + WRITE x2 с подписью uid=1000",
+    "client LOOKUP(transport=HELQ): mlbus создаёт ramfs-файл, размечает пару очередей HelQueue, раздаёт fd, unlink",
+    "client WRITE x2 через очередь: сервер печатает с uid=1000 (creds из LaneRequest, проверены ядром на шине)",
+    "bench: RTT seqpacket vs helq-futex vs helq-yield, enqueue-пачка 64 в один чанк",
+    "CLOSE -> сервер закрывает lane; контрольная STATS served=836 (счётчик сошёлся)",
+    "FUSE-регрессия M4: чтение /mnt/README с uid 1000"
+  ],
+  "bugs_fixed_during_m51": [
+    "livelock шины M5: последовательный accept-цикл не принимал REGISTER, пока обслуживал клиентские LOOKUP-ретраи (клиент сжигал все 100 попыток) -> шина переписана на poll()",
+    "creds первого сообщения lane: SO_PASSCRED не наследуется accepted/SCM_RIGHTS сокетами; без флага на обоих концах до раздачи первое сообщение приходило с unmapped uid (65534)",
+    "дедлок очередей: все чанки отдавались направлению запросов, у ответов free пуст и первый ack не мог уйти -> чанки поделены пополам",
+    "протухший notify-бит: waiter обязан снимать бит при наблюдении пустого состояния, иначе producer не будит (skip-wake-if-set) -> спящий ждал бы вечно",
+    "потеря цепочки чанков: pop через exchange забирает всю цепочку; producer прячет хвост в приватный spare, consumer идёт по next до recycle",
+    "nostdlib: __builtin_memset на 32КБ превращается в вызов libc даже с -ffreestanding -> свой m_memset; mkinitramfs переведён на -ffreestanding",
+    "bragi-поля: имя в head[0..23] перетиралось transport'ом в head-слоте 0 -> transport переехал в слот 2"
+  ]
+}
