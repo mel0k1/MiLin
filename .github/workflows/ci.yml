@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential flex bison bc cpio libelf-dev qemu-system-x86
+
+      - name: fetch linux
+        run: tools/fetch-linux.sh
+
+      - name: build kernel
+        run: tools/build.sh
+
+      - name: boot test
+        run: tools/run-qemu.sh
+
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: milin-bzImage
+          path: build/bzImage
+          if-no-files-found: ignore
