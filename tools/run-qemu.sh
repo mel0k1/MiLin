@@ -25,7 +25,7 @@ done
     -device pci-testdev \
     -kernel build/bzImage -initrd build/initramfs.cpio.gz \
     -append "console=ttyS0 panic=-1" < /dev/null > build/boot.log
-if grep -q "M4 OK" build/boot.log; then
+if grep -q "M5 OK" build/boot.log; then
     echo "BOOT OK"
     exit 0
 fi

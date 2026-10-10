@@ -67,6 +67,27 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define MAP_SHARED 1
 #define MNT_DETACH 2
 
+// --- мини-строки/память: builtins при переменной длине зовут libc ---
+static void *m_memcpy(void *d, const void *s, unsigned n) {
+    unsigned char *dd = d; const unsigned char *ss = s;
+    while (n--) *dd++ = *ss++;
+    return d;
+}
+static void *m_memset(void *d, int c, unsigned n) {
+    unsigned char *dd = d;
+    while (n--) *dd++ = (unsigned char)c;
+    return d;
+}
+static unsigned m_strlen(const char *s) {
+    unsigned n = 0;
+    while (s[n]) n++;
+    return n;
+}
+static int m_strncmp(const char *a, const char *b, unsigned n) {
+    while (n && *a && *a == *b) { a++; b++; n--; }
+    return n ? (u8)*a - (u8)*b : 0;
+}
+
 // --- печать ---
 #define P(s) sys3(SYS_write, 1, (long)(s), sizeof(s) - 1)
 
