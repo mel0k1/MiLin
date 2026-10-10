@@ -28,10 +28,18 @@ jobs:
       - name: boot test
         run: tools/run-qemu.sh
 
+      - name: size report
+        if: always()
+        run: |
+          tools/size-report.sh | tee size-report.md
+          cat size-report.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+
       - name: artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: milin-bzImage
-          path: build/bzImage
+          path: |
+            build/bzImage
+            size-report.md
           if-no-files-found: ignore

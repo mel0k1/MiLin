@@ -1,0 +1,12 @@
+{
+  "milestone": "m1",
+  "date": "2026-10-10",
+  "kernel": "7.2.9",
+  "note": "baseline: tinyconfig + proc/sysfs/tmpfs/shmem + serial console",
+  "bzImage_bytes": 1053696,
+  "vmlinux_bytes": 10877696,
+  "text_bytes": 4081380,
+  "data_bytes": 1529432,
+  "bss_bytes": 327680,
+  "config_y": 529
+}
