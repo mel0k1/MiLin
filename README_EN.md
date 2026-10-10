@@ -62,7 +62,7 @@ flowchart TB
 | M2 | Config diet | everything optional disabled, bzImage −23% ✅ |
 | M3 | Source carving | physically delete subsystems: tree −92% ✅ |
 | M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers ✅ |
-| M5 | Microkernel IPC | endpoint→endpoint message passing |
+| M5 | Microkernel IPC | mbus registry + lane handles + bragi messages ✅ |
 | M6 | Report | honest before/after metrics |
 
 Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
@@ -70,22 +70,26 @@ Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 
 ## Weight-loss progress
 
-| metric | M1 | M2 | M3 | M4 | Δ M1→M4 |
-|--------|----|----|----|----|---------|
-| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | 0.94 MiB | −6.2% |
-| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | ~3.7 MiB | see M6 |
-| CONFIG =y | 529 | 460 | 460 | 448 | −15.3% |
-| **source tree** | 1.8G | 1.8G | **139 MiB** | 154 MiB | **−91.4%** |
-| files in tree | 94,856 | 94,856 | 12,212 | 13,054 | −86.2% |
-| .c/.h lines | 37.2M | 37.2M | 3.5M | 4.0M | −89.3% |
-| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | 1.30 s | −21% |
+| metric | M1 | M2 | M3 | M4 | M5 | Δ M1→M5 |
+|--------|----|----|----|----|----|---------|
+| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | 0.94 MiB | 1.33 MiB | +33% |
+| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | ~3.7 MiB | ~4.2 MiB | see M6 |
+| CONFIG =y | 529 | 460 | 460 | 448 | 472 | −10.8% |
+| **source tree** | 1.8G | 1.8G | **139 MiB** | 154 MiB | 164 MiB | **−90.9%** |
+| files in tree | 94,856 | 94,856 | 12,212 | 13,054 | 13,475 | −85.8% |
+| .c/.h lines | 37.2M | 37.2M | 3.5M | 4.0M | 4.3M | −88.4% |
+| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | 1.30 s | 1.50 s | −9% |
 
 M3 carves the source tree itself (bzImage barely changes — M2 already
 excluded that code from the build). In M4 bzImage grows by +21.6% — this is
 not a diet reversal, it's the price of the server contract: the kernel
 returns not drivers and not filesystems, but the interfaces through which
 userspace controls them (MULTIUSER, the PCI bus, UIO, FUSE, devtmpfs,
-sysfs). Metrics: `docs/metrics/m4.json`.
+sysfs). In M5 it grows +41% — the price of the IPC transport: AF_UNIX pulls
+in net/core, netlink, sched, loopback and kernel/bpf (the v7.2 select
+contract). Protocol families (inet and friends) stay carved out — MiLin's
+net/Kconfig is hand-written and minimal. Metrics: `docs/metrics/m4.json`,
+`docs/metrics/m5.json`.
 
 ## What lives where
 
@@ -139,6 +143,24 @@ After boot the kernel no longer "really" knows filesystems or drivers:
 4. a client created with `setuid(1000)` (MULTIUSER is back) reads
    `/mnt/README` through the FUSE server — uid isolation and the server
    working together.
+
+## M5 in a nutshell
+
+Servers are no longer orphans: they have a bus (the mbus idea from
+Managarm, transport is plain IPC over AF_UNIX SOCK_SEQPACKET):
+
+1. `mlbus` — the registry: a server does `REGISTER("log")`, a client does
+   `LOOKUP("log")`; the bus creates a socketpair and hands out both ends
+   via SCM_RIGHTS — communication then goes endpoint→endpoint, the bus
+   never sees the data (GetRemoteLane analog);
+2. messages follow the bragi style: header `{proto, msg_id, err,
+   tail_len}` + inline fields + variable tail + hooks (handles); one
+   message = one atomic packet;
+3. the client (uid 1000) gets a lane, sends two WRITEs and STATS; the log
+   server prints them to the UART, answers with acks and reports `served=2`;
+4. the M4 FUSE regression passes: the same client reads `/mnt/README`;
+5. the supervisor stops long-running servers with SIGTERM, like a proper
+   microkernel manager.
 
 ## License
 

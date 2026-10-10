@@ -1,0 +1,47 @@
+{
+  "milestone": "m5",
+  "date": "2026-10-10",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "микроядерный IPC: реестр lane'ов /sbin/mlbus (идея mbus из Managarm), формат сообщений в стиле bragi ({proto,msg_id,err,tail_len} + head + tail + hooks), транспорт AF_UNIX SOCK_SEQPACKET + SCM_RIGHTS. Серверы регистрируются в шине, клиент получает lane-хэндл через LOOKUP и общается endpoint→endpoint. В ядро вернулся минимальный net (авторский net/Kconfig: NET + UNIX, без inet): net/{socket,devres,sysctl_net}.c, net/core, net/ethernet, net/ethtool, net/ipv6 (только obj-y ядро), net/netlink, net/sched, net/unix + drivers/net/loopback + kernel/bpf (select-контракт v7.2; JIT выключен). Дополнительно: carve-фикс tcx.o (obj-$(CONFIG_NET_XGRESS))",
+  "vanilla_v72": {
+    "tree_size": "1.8G",
+    "tree_files": 94856,
+    "tree_loc_c_h": 37164731
+  },
+  "tree_size": "164M",
+  "tree_files": 13475,
+  "tree_loc_c_h": 4344629,
+  "tree_delta_vs_m4": {
+    "note": "возврат транспорта IPC (минимальный net + kernel/bpf + loopback)",
+    "size": "+10M (154M -> 164M)",
+    "files": "+421 (13054 -> 13475)",
+    "loc": "+362K (4.0M -> 4.3M)"
+  },
+  "bzImage_bytes": 1393664,
+  "bzImage_note": "M4: 988160; +41% = цена транспорта IPC: NET тянет select BPF (контракт v7.2), net/core/filter.o ссылается на хелперы BPF безусловно -> net/core + netlink + sched + loopback + kernel/bpf(SYSCALL, без JIT). Протоколы (inet) остаются вырезанными",
+  "config_y_count": 472,
+  "boot_seconds": 1.5,
+  "boot_ok": true,
+  "boot_marker": "M5 OK",
+  "demo_chain": [
+    "supervisor spawns mlbus (bus registry @milin-bus) + logsrv + uiod + fused",
+    "logsrv REGISTER(\"log\") in mlbus (mbus-style)",
+    "client setuid(1000): LOOKUP(\"log\") -> mlbus creates socketpair, hands ends via SCM_RIGHTS (GetRemoteLane analog)",
+    "client sends 2 bragi-style WRITE messages -> logsrv prints to UART, replies with acks",
+    "client sends STATS -> logsrv reports served=2",
+    "M4 regression: same client reads /mnt/README through FUSE (uid 1000)",
+    "shutdown: umount -> fused exits on EOF; supervisor SIGTERMs mlbus/logsrv (microkernel-style manager)"
+  ],
+  "ipc_protocols": {
+    "ML_PROTO_BUS": {
+      "RegisterRequest": 1, "RegisterResponse": 2,
+      "LookupRequest": 3, "LookupResponse": 4,
+      "LaneRequest": 5
+    },
+    "ML_PROTO_LOG": {
+      "WriteRequest": 1, "WriteResponse": 2,
+      "StatsRequest": 3, "StatsResponse": 4
+    },
+    "errors": { "OK": 0, "NO_SUCH_ENTITY": 1 }
+  }
+}
