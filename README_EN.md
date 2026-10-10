@@ -63,6 +63,7 @@ flowchart TB
 | M3 | Source carving | physically delete subsystems: tree −92% ✅ |
 | M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers ✅ |
 | M5 | Microkernel IPC | mbus registry + lane handles + bragi messages ✅ |
+| M5.1 | Async queues | HelQueue in shared memory + futex + creds ✅ |
 | M6 | Report | honest before/after metrics |
 
 Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
@@ -70,15 +71,15 @@ Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 
 ## Weight-loss progress
 
-| metric | M1 | M2 | M3 | M4 | M5 | Δ M1→M5 |
-|--------|----|----|----|----|----|---------|
-| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | 0.94 MiB | 1.33 MiB | +33% |
-| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | ~3.7 MiB | ~4.2 MiB | see M6 |
-| CONFIG =y | 529 | 460 | 460 | 448 | 472 | −10.8% |
-| **source tree** | 1.8G | 1.8G | **139 MiB** | 154 MiB | 164 MiB | **−90.9%** |
-| files in tree | 94,856 | 94,856 | 12,212 | 13,054 | 13,475 | −85.8% |
-| .c/.h lines | 37.2M | 37.2M | 3.5M | 4.0M | 4.3M | −88.4% |
-| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | 1.30 s | 1.50 s | −9% |
+| metric | M1 | M2 | M3 | M4 | M5 | M5.1 | Δ M1→M5.1 |
+|--------|----|----|----|----|----|------|---------|
+| bzImage | 1.00 MiB | 0.77 MiB | 0.77 MiB | 0.94 MiB | 1.33 MiB | 1.34 MiB | +34% |
+| kernel text | 3.89 MiB | 3.40 MiB | ~3.4 MiB | ~3.7 MiB | ~4.2 MiB | ~4.2 MiB | see M6 |
+| CONFIG =y | 529 | 460 | 460 | 448 | 472 | 476 | −10% |
+| **source tree** | 1.8G | 1.8G | **139 MiB** | 154 MiB | 164 MiB | 164 MiB | **−90.9%** |
+| files in tree | 94,856 | 94,856 | 12,212 | 13,054 | 13,475 | 13,475 | −85.8% |
+| .c/.h lines | 37.2M | 37.2M | 3.5M | 4.0M | 4.3M | 4.3M | −88.4% |
+| QEMU boot time | 1.65 s | 1.16 s | 1.19 s | 1.30 s | 1.50 s | 1.50 s | −9% |
 
 M3 carves the source tree itself (bzImage barely changes — M2 already
 excluded that code from the build). In M4 bzImage grows by +21.6% — this is
@@ -88,8 +89,9 @@ userspace controls them (MULTIUSER, the PCI bus, UIO, FUSE, devtmpfs,
 sysfs). In M5 it grows +41% — the price of the IPC transport: AF_UNIX pulls
 in net/core, netlink, sched, loopback and kernel/bpf (the v7.2 select
 contract). Protocol families (inet and friends) stay carved out — MiLin's
-net/Kconfig is hand-written and minimal. Metrics: `docs/metrics/m4.json`,
-`docs/metrics/m5.json`.
+net/Kconfig is hand-written and minimal. M5.1 adds only the futex
+contract: +8 KB (+0.6%). Metrics: `docs/metrics/m4.json`,
+`docs/metrics/m5.json`, `docs/metrics/m51.json`.
 
 ## What lives where
 
@@ -161,6 +163,31 @@ Managarm, transport is plain IPC over AF_UNIX SOCK_SEQPACKET):
 4. the M4 FUSE regression passes: the same client reads `/mnt/README`;
 5. the supervisor stops long-running servers with SIGTERM, like a proper
    microkernel manager.
+
+## M5.1 in a nutshell: HelQueue
+
+The M5 transport is honest but slow (two syscalls per message, the kernel
+copies the data). In Managarm, HelQueue queues live in shared memory — the
+kernel never touches the data path. The idea has been transplanted to
+user↔user and mixed with plain IPC:
+
+1. a pair of queues in a shm region (ramfs file → MAP_SHARED → fd via
+   SCM_RIGHTS → unlink — no TMPFS, no MEMFD_CREATE);
+2. chunks with a progress word and length-prefixed elements — the consumer
+   reads the payload straight from shared memory (zero copy);
+3. the wakeup is a futex word with DATA/SUPPLY bits: atomic OR/AND and
+   real futex parking (the HelFutex analog);
+4. flow control — consumed chunks go back to a free list;
+5. creds: SO_PASSCRED/SCM_CREDENTIALS — the kernel attaches a ucred to
+   every lane message, the bus forwards it to the server, log records are
+   signed with uid=1000.
+
+In-system benchmark (QEMU TCG, rdtsc, n=256; for relative comparison):
+seqpacket RTT 297.7K cycles → queue+futex 181.7K (×1.64) → poll+yield
+161.2K (×1.85); batched enqueue costs 5.1K cycles/message (58× cheaper
+than an seqpacket RTT). Price: CONFIG_FUTEX = +8 KB of bzImage (+0.6%).
+Full analysis in `docs/metrics/m51.json`, boot log in
+`docs/boot-m51.log`.
 
 ## License
 
