@@ -1,0 +1,6 @@
+# шина: реестр lane'ов + права (M7) + фабрика helq-очередей
+name=mlbus
+exec=/sbin/mlbus
+type=service
+stop=term
+order=10

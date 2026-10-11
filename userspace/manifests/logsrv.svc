@@ -1,0 +1,6 @@
+# log-сервер: печатает сообщения клиентов с их uid
+name=logsrv
+exec=/sbin/logsrv
+type=service
+stop=term
+order=20

@@ -48,9 +48,11 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_open      2
 #define SYS_close     3
 #define SYS_stat      4
+#define SYS_lseek     8
 #define SYS_mmap      9
 #define SYS_munmap    11
 #define SYS_nanosleep 35
+#define SYS_getdents64 217
 #define SYS_fork      57
 #define SYS_execve    59
 #define SYS_exit      60
@@ -64,13 +66,27 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_mount     165
 #define SYS_umount2   166
 
+#define O_RDONLY   0
+#define O_WRONLY   1
 #define O_RDWR     2
 #define O_CREAT    0100
 #define O_TRUNC    01000
+#define O_DIRECTORY 0200000
 #define PROT_READ  1
 #define PROT_WRITE 2
 #define MAP_SHARED 1
 #define MNT_DETACH 2
+#define SEEK_SET   0
+
+// getdents64: struct linux_dirent64 живёт не в uapi, но ABI стабилен;
+// имена в буфере уже NUL-terminированы ядром
+struct ldirent64 {
+    u64 d_ino;
+    i64 d_off;
+    u16 d_reclen;
+    u8 d_type;
+    char d_name[];
+};
 
 // --- мини-строки/память: builtins при переменной длине зовут libc ---
 static void *m_memcpy(void *d, const void *s, unsigned n) {

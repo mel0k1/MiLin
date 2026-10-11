@@ -1,0 +1,6 @@
+# файловая система в userspace (FUSE): /mnt с README и note.txt
+name=fused
+exec=/sbin/fused
+type=service
+stop=umount
+order=40

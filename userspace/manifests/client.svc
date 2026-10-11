@@ -1,0 +1,5 @@
+# непривилегированный клиент: IPC-демо, capability, бенчмарки, FUSE
+name=client
+exec=/sbin/client
+type=oneshot
+order=90

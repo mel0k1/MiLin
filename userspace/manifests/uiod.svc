@@ -1,0 +1,6 @@
+# userspace-драйвер PCI (UIO): qemu pci-testdev
+name=uiod
+exec=/sbin/uiod
+type=service
+stop=term
+order=30
