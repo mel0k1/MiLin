@@ -334,6 +334,8 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
     u32 ip = ntohl(((struct sockaddr_in *)sa)->sin_addr.s_addr);
     u16 port = ntohs(((struct sockaddr_in *)sa)->sin_port);
     pthread_mutex_lock(&tab_m);
+    int st = k->state;
+    if (st == 2) { pthread_mutex_unlock(&tab_m); return 0; }
     k->state = 1;
     pthread_mutex_unlock(&tab_m);
     // установление синхронно для клиента: NET_CONNECT_R придёт с SYN-ACK'ом

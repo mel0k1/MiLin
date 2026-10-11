@@ -614,7 +614,12 @@ static void sk_connect(struct lane *ln, u32 sid, u32 rip, u16 rport) {
     struct ml_msg r = { ML_PROTO_NET, NET_CONNECT_R, ML_E_OK, 0, {0} };
     *ml_h(&r, 0) = sid;
     struct sock *s = sk_by_sid(sid);
-    if (!s || s->state != SS_ALLOC) { r.err = ML_E_NO_SUCH_ENTITY; goto out; }
+    // libfetch дергает connect() повторно (happy-eyeballs ретраи):
+    // ALLOC — стартуем; SYN — уже устанавливается (ответ придёт async);
+    // EST — уже установлено, подтверждаем сразу
+    if (!s) { r.err = ML_E_NO_SUCH_ENTITY; goto out; }
+    if (s->state == SS_SYN) return;
+    if (s->state == SS_EST) goto out;
     s->rip = rip; s->rport = rport;
     s->lport = (u16)(40000 + (next_port++ % 20000));
     s->iss = 0x1200 + now_t * 7919 + sid * 131;
