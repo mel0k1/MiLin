@@ -1,0 +1,6 @@
+# userspace-сеть: e1000 через UIO + TCP/IP + сервис "net0"
+name=netd
+exec=/sbin/netd
+type=service
+stop=term
+order=40

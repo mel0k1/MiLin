@@ -1,0 +1,5 @@
+# M12-гейт: HTTP GET 10.0.2.2:8000 через netd (slirp -> host)
+name=netclient
+exec=/sbin/netclient
+type=oneshot
+order=95
