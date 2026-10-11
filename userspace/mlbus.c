@@ -63,6 +63,59 @@ struct reg {
 
 static struct reg regs[MAXREG];
 
+// --- M7.1: журнал выданных capabilities ---
+// шина выдала lane клиенту (по conn её LOOKUP) на сервере — пока клиент
+// жив, права в силе; умер (EOF на его конне к шине) — шина шлёт серверу
+// REVOKE. Ключ — conn: у процесса может быть несколько коннов (форки).
+#define MAXCAP 16
+struct issued {
+    int used;
+    long client;    // conn клиента к шине
+    u32 pid;        // pid клиента (creds от ядра)
+    long server;    // conn сервера к шине
+};
+static struct issued issued_caps[MAXCAP];
+
+// одна запись на пару (клиент, сервер): сервер отзывает по pid сразу все
+// lane'ы этого клиента, дубликаты не нужны
+static void cap_add(long client, u32 pid, long server) {
+    for (int i = 0; i < MAXCAP; i++)
+        if (issued_caps[i].used && issued_caps[i].client == client
+            && issued_caps[i].server == server) {
+            issued_caps[i].pid = pid;
+            return;
+        }
+    for (int i = 0; i < MAXCAP; i++)
+        if (!issued_caps[i].used) {
+            issued_caps[i].used = 1;
+            issued_caps[i].client = client;
+            issued_caps[i].pid = pid;
+            issued_caps[i].server = server;
+            return;
+        }
+}
+
+// клиент умер: его права отзывает владелец (шина), сервер только enforced'ит
+static void cap_revoke_client(long client) {
+    for (int i = 0; i < MAXCAP; i++) {
+        if (!issued_caps[i].used || issued_caps[i].client != client) continue;
+        P("mlbus: клиент (pid ");
+        print_dec_n(issued_caps[i].pid);
+        P(") умер — revoke capability -> серверу\n");
+        struct ml_msg rv = { ML_PROTO_BUS, BUS_REVOKE, 0, 0, {0} };
+        *ml_h(&rv, 0) = issued_caps[i].pid;
+        ml_send(issued_caps[i].server, &rv, 0, 0, 0, 0);
+        issued_caps[i].used = 0;
+    }
+}
+
+// сервер умер: его записи в журнале прав больше не имеют силы
+static void cap_drop_server(long server) {
+    for (int i = 0; i < MAXCAP; i++)
+        if (issued_caps[i].used && issued_caps[i].server == server)
+            issued_caps[i].used = 0;
+}
+
 static struct reg *reg_by_conn(long fd) {
     for (int i = 0; i < MAXREG; i++)
         if (regs[i].used && regs[i].conn == fd)
@@ -260,6 +313,8 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         // (в M2 tmpfs вырезан, имя в /tmp нам больше не нужно)
         sys3(SYS_unlink, (long)last_path, 0, 0);
     }
+    // M7.1: lane выдан — фиксируем в журнале прав (отзыв — по смерти клиента)
+    cap_add(client, pid, r->conn);
     P("mlbus: lookup ");
     print_str(name);
     P(": uid ");
@@ -385,9 +440,13 @@ void milin_main(void) {
                 pfd_del(c);
                 if (r) {
                     r->used = 0;
+                    cap_drop_server(c);
                     P("mlbus: сервер \"");
                     print_str(r->name);
                     P("\" отвалился, имя освобождено\n");
+                } else {
+                    // M7.1: умер не сервер, а клиент — его права отозвать
+                    cap_revoke_client(c);
                 }
             }
         }

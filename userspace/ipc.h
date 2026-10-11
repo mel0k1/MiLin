@@ -54,6 +54,12 @@ static int futex_wait(volatile int *uaddr, int val) {
     // таймаут NULL = ждать бесконечно; EAGAIN = значение изменилось
     return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAIT, val, 0, 0, 0);
 }
+
+// паркинг с будильником (M7.1): ETIMEDOUT (-110) = тишина ms миллисекунд
+static int futex_wait_to(volatile int *uaddr, int val, long ms) {
+    struct { long sec, nsec; } t = { 0, ms * 1000000L };
+    return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAIT, val, (long)&t, 0, 0);
+}
 static int futex_wake(volatile int *uaddr) {
     return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAKE, 1, 0, 0, 0);
 }
@@ -272,6 +278,8 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 // LaneRequest      5 { hooks: [lane]; tail: rights } шина -> сервер
 // WhereisRequest    6 { head: name[24] }              клиент -> шина (M7)
 // WhereisResponse   7 { head: pid }                   шина -> клиент (M7)
+// RevokeRequest     8 { head: client_pid }            шина -> сервер (M7.1:
+//                    клиент умер — права на его lane'ы отозвать)
 
 #define ML_PROTO_BUS 1
 #define BUS_REGISTER   1
@@ -281,6 +289,7 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 #define BUS_LANE_REQ   5
 #define BUS_WHEREIS    6
 #define BUS_WHEREIS_R  7
+#define BUS_REVOKE     8
 
 // --- протокол log-сервера (ML_PROTO_LOG) ---
 // WriteRequest  1 { tail: текст }                    клиент -> сервер

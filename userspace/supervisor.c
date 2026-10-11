@@ -361,6 +361,84 @@ static int run_client(void) {
     }
     P("client: fault: WRITE на новый lane подтверждён — автоперезапуск работает\n");
     sys3(SYS_close, a2.hooks[0], 0, 0);
+
+    // 7) M7.1: revoke capability при смерти клиента. Жертва берёт helq-lane
+    //    и паркуется; шина видит её смерть (EOF на конне) и шлёт серверу
+    //    REVOKE, сервер отзывает права (сторож очереди + sig0). Без этого
+    //    мёртвый клиент навсегда держал бы lane и права на него
+    int vpid = sys3(SYS_fork, 0, 0, 0);
+    if (vpid == 0) {
+        // жертва: свой конн к шине (родительский не трогаем), lane, WRITE, парковка
+        long vbus = wait_bus();
+        if (vbus >= 0) {
+            struct ml_aux vaux;
+            u32 vrights;
+            if (lookup_log(vbus, ML_TR_HELQ, &vaux, &vrights) == 0 && vaux.nhooks >= 2) {
+                struct mlq_pair *vp = mlq_map(vaux.hooks[1]);
+                if (vp) {
+                    struct mlq_out vout;
+                    mlq_out_init(&vout, vp, 0);
+                    static u8 vbuf[sizeof(struct ml_msg) + 64];
+                    struct ml_msg vw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
+                    m_memcpy(vbuf, &vw, sizeof(vw));
+                    const char *vt = "жертва: жива, держу helq-lane";
+                    m_memcpy(vbuf + sizeof(vw), vt, m_strlen(vt));
+                    mlq_put(&vout, LOG_WRITE, vbuf,
+                            sizeof(vw) + m_strlen(vt), MLQ_FUTEX);
+                    mlq_flush(&vout);
+                    for (;;) sleep_ms(1000); // дальше — только смерть
+                }
+            }
+        }
+        sys3(SYS_exit, 0, 0, 0);
+    }
+    sleep_ms(300); // жертва успевает взять lane и написать
+    P("client: revoke: жертва (pid ");
+    print_dec_n(vpid);
+    P(") держит helq-lane — SIGKILL\n");
+    sys3(SYS_kill, vpid, SIGKILL, 0);
+    int vst = 0;
+    sys5(SYS_wait4, vpid, (long)&vst, 0, 0, 0); // реап: иначе зомби сбивает sig0
+
+    // проверка: сервер обязан отпустить мёртвый lane и обслужить новый
+    struct ml_aux nxaux;
+    u32 nxr = 0;
+    if (lookup_log(bus, ML_TR_HELQ, &nxaux, &nxr) < 0 || nxaux.nhooks < 2) {
+        P("client: revoke: сервер не отпустил lane мертвец — FAIL\n");
+        return 1;
+    }
+    struct mlq_pair *np = mlq_map(nxaux.hooks[1]);
+    if (!np) {
+        P("client: revoke: mmap FAIL\n");
+        return 1;
+    }
+    sys3(SYS_close, nxaux.hooks[1], 0, 0);
+    struct mlq_out nout;
+    mlq_out_init(&nout, np, 0);
+    struct mlq_in nin;
+    mlq_in_init(&nin, np, 1);
+    static u8 nbuf[sizeof(struct ml_msg) + 80];
+    struct ml_msg nw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
+    m_memcpy(nbuf, &nw, sizeof(nw));
+    const char *nt = "capability мертвеца отозваны — сервер жив";
+    m_memcpy(nbuf + sizeof(nw), nt, m_strlen(nt));
+    mlq_put(&nout, LOG_WRITE, nbuf, sizeof(nw) + m_strlen(nt), MLQ_FUTEX);
+    mlq_flush(&nout);
+    for (;;) {
+        struct mlq_view nv;
+        mlq_next(&nin, &nv, MLQ_FUTEX);
+        if (nv.len < sizeof(struct ml_msg)) continue;
+        const struct ml_msg *nm = (const struct ml_msg *)nv.payload;
+        if (nm->msg_id != LOG_WRITE_R) continue;
+        if (nm->err != ML_E_OK) {
+            P("client: revoke: ack FAIL\n");
+            return 1;
+        }
+        break;
+    }
+    sys6(SYS_munmap, (long)np, MLQ_SIZE, 0, 0, 0, 0);
+    sys3(SYS_close, nxaux.hooks[0], 0, 0);
+    P("client: revoke: права мертвеца отозваны, сервер обслужил новый lane: OK\n");
     sys3(SYS_close, bus, 0, 0);
 
     // stat через FUSE: пока fused не смонтировал /mnt, системный вызов
@@ -575,9 +653,10 @@ void milin_main(void) {
         P("M5 OK: mbus-реестр + lane-хэндлы + bragi-формат + FUSE-регрессия\n");
         P("M5.1 OK: helqueue async rings + futex + creds + bench\n");
         P("M7 OK: capability lanes + supervisor auto-restart\n");
+        P("M7.1 OK: revoke capability on client death\n");
         sys3(SYS_exit, 0, 0, 0);
     }
-    P("M7 FAILED\n");
+    P("M7.1 FAILED\n");
     sys3(SYS_exit, 1, 0, 0);
     __builtin_unreachable();
 }

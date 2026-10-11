@@ -24,6 +24,9 @@
 // Режимы ожидания: MLQ_FUTEX — парковка настоящим futex (безbusy-поллинга);
 // MLQ_YIELD — поллинг с sched_yield (для однопроцессорной машины, где
 // чистый spin означал бы дедлок: крутищийся consumer не пустит producer).
+// MLQ_WATCHDOG — futex с таймаутом 50мс: mlq_next возвращает 0, если
+// данных нет (M7.1: потребитель проверяет, жив ли сосед по очереди —
+// смерть клиента в shm невидима, EOF тут не бывает).
 #ifndef MILIN_HELQ_H
 #define MILIN_HELQ_H
 
@@ -140,6 +143,7 @@ static int mlq_pop(volatile int *head, struct mlq_pair *p) {
 // режимы ожидания
 #define MLQ_FUTEX 0
 #define MLQ_YIELD 1
+#define MLQ_WATCHDOG 2
 
 static void mlq_notify(volatile int *notify, int bit) {
     int old = __atomic_fetch_or(notify, bit, __ATOMIC_RELEASE);
@@ -153,19 +157,21 @@ static void mlq_notify(volatile int *notify, int bit) {
 // иначе спящий будет ждать вечно — producer не будит, если бит уже стоит.
 // Поэтому: состояние пусто + бит стоит -> снять бит, перепроверить
 // состояние, и только потом парковаться.
-static void mlq_wait_state(volatile int *notify, int bit,
+static int mlq_wait_state(volatile int *notify, int bit,
                            volatile int *state, int mode) {
     for (;;) {
-        if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return;
+        if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return 1;
         int n = __atomic_load_n(notify, __ATOMIC_RELAXED);
         if (n & bit) {
             __atomic_fetch_and(notify, ~bit, __ATOMIC_ACQ_REL);
-            if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return;
+            if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return 1;
             continue; // бит снят: можно парковаться
         }
         int val = __atomic_load_n(notify, __ATOMIC_RELAXED);
         if (mode == MLQ_FUTEX) {
             futex_wait(notify, val); // EAGAIN = значение сменилось: цикл
+        } else if (mode == MLQ_WATCHDOG) {
+            if (futex_wait_to(notify, val, 50) == -110) return 0; // ETIMEDOUT
         } else {
             sys3(SYS_sched_yield, 0, 0, 0);
         }
@@ -276,7 +282,8 @@ static void mlq_recycle(struct mlq_in *in) {
     in->cur = 0; in->off = 0; in->end = 0;
 }
 
-// следующий элемент; ждёт по режиму; 1 = есть view, 0 = нет данных (yield)
+// следующий элемент; ждёт по режиму; 1 = есть view, 0 = нет данных
+// (MLQ_YIELD — пусто сейчас, MLQ_WATCHDOG — пусто уже 50мс)
 static int mlq_next(struct mlq_in *in, struct mlq_view *v, int mode) {
     struct mlq_hdr *h = &in->p->q[in->dir];
     for (;;) {
@@ -284,7 +291,8 @@ static int mlq_next(struct mlq_in *in, struct mlq_view *v, int mode) {
             int idx = mlq_pop(&h->ready, in->p);
             if (!idx) {
                 // данных нет: ждём DATA-бит (манагарм-танец)
-                mlq_wait_state(&h->notify, MLQ_N_DATA, &h->ready, mode);
+                if (!mlq_wait_state(&h->notify, MLQ_N_DATA, &h->ready, mode))
+                    return 0;
                 continue;
             }
             in->cur = idx;

@@ -113,7 +113,12 @@ static void serve_lane(long lane, u32 rights) {
         char tail[ML_MAXTAIL];
         struct ml_aux aux;
         long r = ml_recv(lane, &m, tail, sizeof(tail), &aux);
-        if (r <= 0) { sys3(SYS_close, lane, 0, 0); return; } // клиент ушёл
+        if (r <= 0) {
+            // M7.1: клиент ушёл или умер — права на lane с ним умирают
+            P("log-srv: seqpacket: клиент отключился — capability отозвана (EOF)\n");
+            sys3(SYS_close, lane, 0, 0);
+            return;
+        }
         if (m.proto != ML_PROTO_LOG) continue;
         u32 uid = aux.has_cred ? aux.cred.uid : 0;
 
@@ -142,11 +147,22 @@ static void serve_queue_lane(struct mlq_pair *p, u32 uid, u32 pid, u32 rights) {
     mlq_in_init(&in, p, 0);            // запросы: направление 0
     struct mlq_out out;
     mlq_out_init(&out, p, 1);          // ответы: направление 1
-    (void)pid;
 
     for (;;) {
         struct mlq_view v;
-        if (!mlq_next(&in, &v, MLQ_FUTEX)) continue;
+        // M7.1: сторож 50мс — мёртвый клиент в shm невидим (EOF не бывает)
+        if (!mlq_next(&in, &v, MLQ_WATCHDOG)) {
+            // sig0: зомби жив, поэтому родня обязана реапнуть; ESRCH = умер
+            if (sys3(SYS_kill, pid, 0, 0) != 0) {
+                P("log-srv: helq: клиент uid ");
+                print_dec_n(uid);
+                P(" (pid ");
+                print_dec_n(pid);
+                P(") умер — capability REVOKED, lane закрыт\n");
+                break;
+            }
+            continue;
+        }
         if (v.len < sizeof(struct ml_msg)) continue;
         const struct ml_msg *m = (const struct ml_msg *)v.payload; // zero copy
         if (m->proto != ML_PROTO_LOG) continue;
@@ -233,6 +249,14 @@ void milin_main(void) {
         struct ml_aux aux;
         // жду, пока шина приведёт клиента (LaneRequest + lane-хэндл + права)
         if (ml_recv(bus, &m2, req_tail, sizeof(req_tail), &aux) <= 0) break;
+        if (m2.proto == ML_PROTO_BUS && m2.msg_id == BUS_REVOKE) {
+            // M7.1: шина — владелец прав, она подтверждает смерть клиента;
+            // свою часть (сторож очереди) сервер уже сделал или сделает
+            P("log-srv: шина: revoke клиента pid ");
+            print_dec_n((long)*ml_h(&m2, 0));
+            P("\n");
+            continue;
+        }
         if (m2.proto == ML_PROTO_BUS && m2.msg_id == BUS_LANE_REQ && aux.nhooks >= 1) {
             u32 transport = (u32)*ml_h(&m2, 2);
             // M7: права на этот lane — шина передала их в tail
