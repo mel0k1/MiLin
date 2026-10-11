@@ -50,18 +50,19 @@ CEC_CORE(+NOTIFIER), VIDEO, BACKLIGHT_CLASS_DEVICE, CRC16, SHMEM, NET_DEVMEM
 
 ## 3. Что вырезано и как вернуть
 
-Проба выявила 7 каталогов, которых нет в форке (все восстанавливаются из
-базы v7.2 целиком, как это уже делалось для sysfs/kernfs/iomap в M4):
+Проба выявила каталоги, которых нет в форке — **восстановлены в M10**
+из базы v7.2 целиком, как это уже делалось для sysfs/kernfs/iomap в M4.
+Оговорка: top-level `drivers/cec` в v7.2 НЕ существует — CEC живёт в
+`drivers/media/cec` и вернулся вместе с media:
 
-| Каталог | Для чего | Хуки |
-|---------|----------|------|
-| `drivers/gpu` | DRM core + amdgpu (+ttm, scheduler, display) | source в drivers/Kconfig, obj в drivers/Makefile |
-| `drivers/dma-buf` | dma-buf/sync_file: обмен буферами с userspace | то же |
-| `drivers/i2c` | DDC/aux-каналы мониторов, DP AUX | то же |
-| `drivers/power` | POWER_SUPPLY (батарея/адаптер для DC) | то же |
-| `drivers/hwmon` | температурные сенсоры GPU | то же |
-| `drivers/media` | CEC-нотификаторы HDMI | то же |
-| `drivers/cec` | CEC core | то же |
+| Каталог | Для чего | Статус |
+|---------|----------|--------|
+| `drivers/gpu` | DRM core + amdgpu (+ttm, scheduler, display) | ✅ M10 |
+| `drivers/dma-buf` | dma-buf/sync_file: обмен буферами с userspace | ✅ M10 |
+| `drivers/i2c` | DDC/aux-каналы мониторов, DP AUX | ✅ M10 |
+| `drivers/power` | POWER_SUPPLY (батарея/адаптер для DC) | ✅ M10 |
+| `drivers/hwmon` | температурные сенсоры GPU | ✅ M10 |
+| `drivers/media` | CEC-нотификаторы HDMI (+media/cec) | ✅ M10 |
 
 Уже на месте: `include/drm`, `include/uapi/drm`, `include/uapi/linux/dma-buf.h`
 (возвращены в M4), `drivers/video` (+backlight), `drivers/base/firmware_loader`
@@ -77,10 +78,13 @@ CEC_CORE(+NOTIFIER), VIDEO, BACKLIGHT_CLASS_DEVICE, CRC16, SHMEM, NET_DEVMEM
 Проба сборки: `make O=... drivers/gpu/drm/amd/amdgpu/` на pristine v7.2
 с замыканием из п.2 — **amdgpu собрался полностью**: 893 объекта, 0 ошибок,
 финальный `AR drivers/gpu/drm/amd/amdgpu/built-in.a` (заголовки, ABI и все
-зависимости amdgpu работают в этом окружении). Полный bzImage с amdgpu —
-вне бюджета дефолтной сборки MiLin (тысячи файлов, bzImage вырастет на
-мегабайты); контракт подтверждён на уровне замыкания Kconfig и полной
-компиляции драйвера.
+зависимости amdgpu работают в этом окружении).
+
+**M10: проверка повторена в ОБРЕЗАННОМ дереве.** Полная сборка bzImage с
+фрагментом `configs/milin-kdrv.config` (build.sh KDRV=1): 989 объектов под
+drivers/gpu, bzImage 3 339 264 байта (+138% к diet-сборке — вне бюджета
+дефолтной диеты, потому и фрагмент), ядро грузится, весь демо-цикл M5–M9
+проходит (docs/boot-m10.log, маркер M10 OK через /sys/module/amdgpu).
 
 Оговорка о железе: QEMU не эмулирует AMD GPU, поэтому runtime-смоук
 amdgpu возможен только на реальном железе (bzImage + CONFIG_DRM_AMDGPU).

@@ -348,6 +348,34 @@ MMIO/IRQ/DMA), но как ОТДЕЛЬНЫЙ процесс домена — kt
 syscall-контексте), placement=user отклоняет запросы, placement=kernel
 возвращает драйвер (новый kthread pid 23).
 
+### M10 — amdgpu в обрезанном дереве ✅
+
+M9 дал механизм размещения, проба (docs/drivers.md) доказала контракт на
+pristine-дереве. M10 доводит до конца: GPU-стек восстанавливается в
+ОБРЕЗАННОЕ дерево, ядро с amdgpu собирается и грузится.
+
+- восстановлено из v7.2 целиком: drivers/gpu (DRM core + amdgpu + ttm +
+  scheduler + display helper + vgaarb), drivers/dma-buf, drivers/i2c,
+  drivers/power, drivers/hwmon, drivers/media. drivers/cec в v7.2 НЕ
+  существует — CEC живёт в media/cec и вернулся вместе с ней;
+- швы: drivers/Makefile (i2c/ media/, power/, hwmon/, gpu/, dma-buf/),
+  drivers/Kconfig (5 source), drivers/video/Kconfig — шов на drivers/gpu/*
+  вырезался ещё в M3 вместе с video-меню, возвращён;
+- 11 980 файлов, 0 битых source-ссылок на 294 Kconfig; дефолтная диета
+  не тронута — milin.config не изменился;
+- включение — фрагмент configs/milin-kdrv.config {DRM, DRM_AMDGPU,
+  FW_LOADER} поверх milin.config: build.sh KDRV=1. Замыкание Kconfig
+  (~47 опций: TTM, scheduler, display helper, i2c, hwmon, power, VGA_ARB,
+  SYNC_FILE, KCMP, INTERVAL_TREE, SHMEM, CRC16) разворачивается прямо
+  в обрезанном дереве;
+- результат: kdrv-bzImage 3 339 264 байта (+138% к diet 1 401 856 —
+  цена документирована честно и живёт только в kdrv-сборке); 989
+  объектов под drivers/gpu;
+- бут-тест (docs/boot-m10.log): супервизор открывает /sys/module/amdgpu —
+  amdgpu встроен в ядро (маркер M10 OK); в QEMU нет AMD-железа, драйвер
+  ни на что не привязался (vgaarb: loaded), весь демо-цикл M5–M9 прошёл
+  на kdrv-ядре. Runtime-смоук GPU — на реальном железе.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -364,6 +392,7 @@ syscall-контексте), placement=user отклоняет запросы, p
 | M7.2 | Каскадный перезапуск при смерти шины | ✅ сделано |
 | M8 | Раздельные пути IPC + glibc userspace | ✅ сделано |
 | M9 | kdriver-домен | ✅ сделано |
+| M10 | amdgpu в обрезанном дереве | ✅ сделано |
 
 ## Честные оговорки
 

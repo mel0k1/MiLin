@@ -1,0 +1,24 @@
+{
+  "milestone": "m10",
+  "date": "2026-10-11",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "amdgpu в обрезанном дереве: восстановление из v7.2 целиком (drivers/gpu с DRM core и amdgpu, drivers/dma-buf, drivers/i2c, drivers/power, drivers/hwmon, drivers/media — в v7.2 нет top-level drivers/cec, CEC живёт в media/cec и вернулся вместе с ней), швы drivers/{Makefile,Kconfig} и drivers/video/Kconfig (source drivers/gpu/*). Включение — только фрагментом configs/milin-kdrv.config {DRM, DRM_AMDGPU, FW_LOADER} поверх milin.config (build.sh KDRV=1); дефолтная диета не меняется. Замыкание Kconfig (~47 опций: TTM, scheduler, display helper, i2c, hwmon, power, VGA_ARB, SYNC_FILE, KCMP, INTERVAL_TREE, SHMEM, CRC16...) разворачивается прямо в обрезанном дереве — olddefconfig",
+  "restore": {
+    "files_added": 11980,
+    "dirs": ["drivers/gpu", "drivers/dma-buf", "drivers/i2c", "drivers/power", "drivers/hwmon", "drivers/media"],
+    "seams": ["drivers/Makefile: i2c/ media/, power/, hwmon/, gpu/, dma-buf/", "drivers/Kconfig: 5 source", "drivers/video/Kconfig: gpu/vga + gpu + host1x + ipu-v3 + nova-core + drm"],
+    "broken_sources": 0
+  },
+  "bzImage_delta": "+1937408 байт (+138%) — цена контракта M10 (только в kdrv-сборке): 1401856 -> 3339264",
+  "bzImage_bytes_diet": 1401856,
+  "bzImage_bytes_kdrv": 3339264,
+  "gpu_objects": 989,
+  "boot_ok": true,
+  "boot_marker": "M10 OK + M9 OK + M8 OK + M7.2 OK + M7.1 OK + M7 OK + M5.1 OK + M5.2 OK + M5 OK",
+  "demo_evidence": {
+    "amdgpu_builtin": "supervisor: /sys/module/amdgpu открывается — amdgpu встроен в ядро (M10 OK)",
+    "no_device": "в QEMU нет AMD-железа: драйвер зарегистрирован, ни на одно PCI-устройство не привязался (vgaarb: loaded), система жива",
+    "regression": "весь демо-цикл M5-M9 (IPC, capabilities, revoke, каскад, glibc, FUSE, kdriver) прошёл на kdrv-ядре",
+    "hardware_note": "runtime-смоук GPU — только на реальном железе (docs/drivers.md §4)"
+  }
+}
