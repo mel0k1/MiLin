@@ -26,6 +26,11 @@ mkdir -p "$OUT"
 cd "$OUT"
 make -C "$SRCTREE" O="$OUT" tinyconfig
 "$SRCTREE/scripts/kconfig/merge_config.sh" -m .config "$MI/configs/milin.config"
+# KDRV=1: добавка configs/milin-kdrv.config — настоящие драйверы (amdgpu и др.)
+if [ -n "$KDRV" ]; then
+    echo "build: kdrv fragment (configs/milin-kdrv.config)"
+    "$SRCTREE/scripts/kconfig/merge_config.sh" -m .config "$MI/configs/milin-kdrv.config"
+fi
 make -C "$SRCTREE" O="$OUT" olddefconfig
 make -C "$SRCTREE" O="$OUT" -j"$(nproc)" $HOST_ARG
 cp "$OUT/arch/x86/boot/bzImage" "$OUT/bzImage"
