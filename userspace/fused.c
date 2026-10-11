@@ -1,7 +1,8 @@
 // /sbin/fused (M4): файловая система в userspace через FUSE.
 // Ядро оставляет себе только ВФС и transport (/dev/fuse); семантика
 // файловой системы — целиком здесь: FUSE_INIT, LOOKUP, GETATTR, ACCESS.
-// Содержимое: /mnt/README — статический файл.
+// M9.1: OPEN/READ — файл не только виден (stat), но и читается:
+// /mnt/README отдаёт содержимое непривилегированному клиенту.
 //
 // ABI сверен с include/uapi/linux/fuse.h v7.2 (FUSE_KERNEL 7.45).
 
@@ -9,12 +10,17 @@
 
 // --- fuse ABI ---
 #define FUSE_LOOKUP  1
+#define FUSE_OPEN    14
+#define FUSE_READ    15
 #define FUSE_GETATTR 3
 #define FUSE_INIT    26
 #define FUSE_ACCESS  34
 
 #define FUSE_ROOT_ID 1
 #define README_INO   2
+
+static const char README_TEXT[] = "MiLin FUSE OK\n";
+#define README_SIZE (sizeof(README_TEXT) - 1)
 
 struct fuse_in_header {
     u32 len;
@@ -36,6 +42,22 @@ struct fuse_attr {
     u64 ino, size, blocks, atime, mtime, ctime;
     u32 atimensec, mtimensec, ctimensec;
     u32 mode, nlink, uid, gid, rdev, blksize, flags;
+};
+
+struct fuse_open_in {
+    u32 flags, open_flags;
+};
+
+struct fuse_open_out {
+    u64 fh;
+    u32 open_flags;
+};
+
+struct fuse_read_in {
+    u64 fh, offset;
+    u32 size, read_flags;
+    u64 lock_owner;
+    u32 flags;
 };
 
 struct fuse_init_out {
@@ -62,7 +84,7 @@ struct fuse_attr_out {
 static struct fuse_attr *fill_attr(struct fuse_attr *a, u64 ino) {
     int dir = (ino == FUSE_ROOT_ID);
     a->ino = ino;
-    a->size = dir ? 4096 : 13;
+    a->size = dir ? 4096 : README_SIZE;
     a->blocks = 1;
     a->atime = a->mtime = a->ctime = 0;
     a->atimensec = a->mtimensec = a->ctimensec = 0;
@@ -168,6 +190,33 @@ void milin_main(void) {
             a.attr_valid = 86400;
             fill_attr(&a.attr, ih->nodeid);
             reply(ih->unique, 0, &a, sizeof(a));
+            break;
+        }
+        case FUSE_OPEN: {
+            struct fuse_open_in *oi = (struct fuse_open_in *)(req_buf + sizeof(*ih));
+            if (ih->nodeid != README_INO) {
+                reply(ih->unique, ih->nodeid == FUSE_ROOT_ID ? -21/*EISDIR*/ : -2/*ENOENT*/, 0, 0);
+                break;
+            }
+            struct fuse_open_out o = { 0 };
+            o.fh = 0; // хэндлы не ведём: READ идёт по nodeid
+            o.open_flags = oi->open_flags;
+            reply(ih->unique, 0, &o, sizeof(o));
+            break;
+        }
+        case FUSE_READ: {
+            struct fuse_read_in *ri = (struct fuse_read_in *)(req_buf + sizeof(*ih));
+            if (ih->nodeid != README_INO) {
+                reply(ih->unique, -2 /*ENOENT*/, 0, 0);
+                break;
+            }
+            if (ri->offset >= README_SIZE) {
+                reply(ih->unique, 0, 0, 0); // EOF
+                break;
+            }
+            u32 n = README_SIZE - (u32)ri->offset;
+            if (n > ri->size) n = ri->size;
+            reply(ih->unique, 0, README_TEXT + ri->offset, n);
             break;
         }
         case FUSE_ACCESS:
