@@ -42,7 +42,9 @@
 #define SO_PASSCRED    16
 #define MSG_TRUNC      0x20
 #define MSG_CTRUNC     0x08
+#define MSG_NOSIGNAL   0x4000
 #define SIGTERM        15
+#define SIGKILL        9
 
 // --- futex: примитив парковки очередей (аналог HelFutex из Managarm) ---
 #define FUTEX_WAIT 0
@@ -127,6 +129,20 @@ static inline u64 *ml_h(struct ml_msg *m, int i) { return (u64 *)(m->head + i * 
 // коды ошибок — как enum Error в mbus.bragi
 #define ML_E_OK              0
 #define ML_E_NO_SUCH_ENTITY  1
+#define ML_E_PERM            2  // отказ по capability-политике (M7)
+
+// --- M7: capability-модель на lane'ах ---
+// lane-fd — непогашаемый хэндл (kernel object): подделать нельзя, передать
+// можно только через SCM_RIGHTS — это и есть передача capability, как в
+// seL4/Fuchsia. Права (маска битов) выдаёт ШИНА при создании lane'а:
+// сервер при REGISTER объявляет политику (какие права — root'у, какие —
+// остальным), шина проверяет kernel-верифицированный uid клиента и
+// доставляет маску ОБЕИМ сторонам. Сервер enforced'ит права на каждой
+// операции; шина — адмиссионный контроль (нет прав — нет и lane'а).
+#define ML_CAP_WRITE  (1u << 0)  // LOG_WRITE / LOG_WRITEQ
+#define ML_CAP_STATS  (1u << 1)  // LOG_STATS
+#define ML_CAP_CLOSE  (1u << 2)  // LOG_CLOSE (закрытие helq-сессии)
+#define ML_CAP_ADMIN  (1u << 3)  // LOG_RESET (админ-операция)
 
 // --- транспорт ---
 
@@ -195,7 +211,9 @@ static int ml_send(long fd, struct ml_msg *m, const void *tail, u32 tlen,
         mh.msg_control = cbuf;
         mh.msg_controllen = CMSG_SPACE(nhooks * 4);
     }
-    long r = sys3(SYS_sendmsg, fd, (long)&mh, 0);
+    // MSG_NOSIGNAL обязателен: lane может оказаться мёртвым (сервер убит,
+    // клиент ушёл) — SIGPIPE вместо EPIPE убил бы шину (M7)
+    long r = sys3(SYS_sendmsg, fd, (long)&mh, MSG_NOSIGNAL);
     return (int)r;
 }
 
@@ -251,7 +269,9 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 // RegisterResponse 2 { head: err }
 // LookupRequest    3 { head: name[24] }              клиент -> шина
 // LookupResponse   4 { head: err; hooks: [lane] }    шина -> клиент
-// LaneRequest      5 { hooks: [lane] }               шина -> сервер
+// LaneRequest      5 { hooks: [lane]; tail: rights } шина -> сервер
+// WhereisRequest    6 { head: name[24] }              клиент -> шина (M7)
+// WhereisResponse   7 { head: pid }                   шина -> клиент (M7)
 
 #define ML_PROTO_BUS 1
 #define BUS_REGISTER   1
@@ -259,6 +279,8 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 #define BUS_LOOKUP     3
 #define BUS_LOOKUP_R   4
 #define BUS_LANE_REQ   5
+#define BUS_WHEREIS    6
+#define BUS_WHEREIS_R  7
 
 // --- протокол log-сервера (ML_PROTO_LOG) ---
 // WriteRequest  1 { tail: текст }                    клиент -> сервер
@@ -267,6 +289,9 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 // StatsResponse 4 { head: served }
 // CloseRequest  5 { }                                клиент -> сервер (helq)
 // CloseResponse 6 { head: served }
+// тихий WRITE для бенчмарка: считается, но не печатается в UART
+// ResetRequest  8 { }      админ-операция: сброс счётчика (M7, нужен ML_CAP_ADMIN)
+// ResetResponse 9 { head: served }
 
 #define ML_PROTO_LOG 2
 #define LOG_WRITE    1
@@ -275,8 +300,9 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 #define LOG_STATS_R  4
 #define LOG_CLOSE    5
 #define LOG_CLOSE_R  6
-// тихий WRITE для бенчмарка: считается, но не печатается в UART
 #define LOG_WRITEQ   7
+#define LOG_RESET    8
+#define LOG_RESET_R  9
 
 // --- транспорт lane'а: head[0] в LookupRequest ---
 #define ML_TR_SEQPACKET 0    // AF_UNIX SOCK_SEQPACKET (M5)

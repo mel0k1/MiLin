@@ -116,6 +116,17 @@ static void print_dec(long v) {
     sys3(SYS_write, 1, (long)"\n", 1);
 }
 
+// плоский hex (без 0x и перевода строки): маски прав в лог-строках
+static void print_hex_flat(u32 v) {
+    char buf[8];
+    for (int i = 7; i >= 0; i--) {
+        int d = v & 15;
+        buf[i] = d < 10 ? '0' + d : 'a' + d - 10;
+        v >>= 4;
+    }
+    sys3(SYS_write, 1, (long)buf, 8);
+}
+
 static void print_hex(u32 v) {
     char buf[12];
     int i = 12;

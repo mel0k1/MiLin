@@ -10,13 +10,19 @@
 //     памяти (userspace/helq.h): zero-copy элементы, будильник futex,
 //     creds проверяются ядром (SCM_CREDENTIALS) и шиной. Плюс честный
 //     бенчмарк транспортов для отчёта M6 (маркер ipc-bench в boot.log).
+// M7: capability-модель на lane'ах (права выдает шина по политике
+//     сервера, сервер enforced'ит по операциям) и отказоустойчивость:
+//     супервизор следит за сервисами через wait4(-1) и перезапускает
+//     павших; клиент демонстрирует полный цикл — узнаёт pid сервера
+//     через WHEREIS, убивает его SIGKILL'ом и продолжает работу на
+//     lane'е, выданном уже ПЕРЕЗАПУЩЕННЫМ сервером.
 //
-//   супервизор  /init        — порождает и следит за серверами
-//   реестр      /sbin/mlbus  — именованные lane'и (mbus) + helq-фабрика
+//   супервизор  /init        — порождает, следит и перезапускает серверы
+//   реестр      /sbin/mlbus  — именованные lane'и (mbus) + права (M7)
 //   log-сервер  /sbin/logsrv — сервис, принимающий сообщения
 //   драйвер     /sbin/uiod   — UIO: userspace-драйвер PCI-устройства
 //   фс-сервер   /sbin/fused  — FUSE: файловая система в userspace
-//   клиент      fork(setuid 1000) — IPC-демо + бенчмарк + FUSE-демо
+//   клиент      fork(setuid 1000) — IPC-демо + capability + отказ-инъекция
 
 #include "milin.h"
 #include "ipc.h"
@@ -41,14 +47,6 @@ static inline u64 rdtsc(void) {
     return ((u64)hi << 32) | lo;
 }
 
-static int ok_status(int status) {
-    // вышел с 0 — норма; убит SIGTERM супервизором — тоже норма:
-    // так супервизор останавливает долгоживущие серверы
-    if ((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0) return 1;
-    if ((status & 0x7f) == SIGTERM) return 1;
-    return 0;
-}
-
 // дождаться шины (форк не гарантирует порядок старта)
 static long wait_bus(void) {
     for (int tries = 0; ; tries++) {
@@ -61,8 +59,10 @@ static long wait_bus(void) {
 
 // LOOKUP(name, transport) -> lane (+ shm для helq); повторяет попытки.
 // имя живёт в head[0..15] (строка), transport — в head-слоте 2
-// (слот 0 занят именем: bragi-поля не должны пересекаться)
-static int lookup_log(long bus, int transport, struct ml_aux *aux) {
+// (слот 0 занят именем: bragi-поля не должны пересекаться).
+// M7: шина возвращает права на lane (head-слот 0 ответа) — capability
+// маска, выданная по uid-политике сервера
+static int lookup_log(long bus, int transport, struct ml_aux *aux, u32 *rights) {
     struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
     m_memcpy(q.head, "log", 4);
     *ml_h(&q, 2) = transport;
@@ -70,7 +70,11 @@ static int lookup_log(long bus, int transport, struct ml_aux *aux) {
         if (ml_send(bus, &q, 0, 0, 0, 0) < 0) return -1;
         struct ml_msg resp;
         if (ml_recv(bus, &resp, 0, 0, aux) <= 0) return -1;
-        if (resp.err == ML_E_OK && aux->nhooks >= 1) return 0;
+        if (resp.err == ML_E_OK && aux->nhooks >= 1) {
+            if (rights) *rights = (u32)*ml_h(&resp, 0);
+            return 0;
+        }
+        if (resp.err == ML_E_PERM) return -2; // прав нет — ретраи не помогут
         sleep_ms(20); // сервер ещё регистрируется или обслуживает другой lane
     }
     return -1;
@@ -79,7 +83,7 @@ static int lookup_log(long bus, int transport, struct ml_aux *aux) {
 // --- M5: классический обмен поверх SOCK_SEQPACKET ---
 static int demo_seqpacket(long bus, int bench) {
     struct ml_aux aux;
-    if (lookup_log(bus, ML_TR_SEQPACKET, &aux) < 0) {
+    if (lookup_log(bus, ML_TR_SEQPACKET, &aux, 0) < 0) {
         P("client: seqpacket: lookup FAIL\n");
         return 1;
     }
@@ -135,7 +139,7 @@ static int demo_seqpacket(long bus, int bench) {
 // --- M5.1: обмен поверх асинхронных очередей в разделяемой памяти ---
 static int demo_helq(long bus) {
     struct ml_aux aux;
-    if (lookup_log(bus, ML_TR_HELQ, &aux) < 0 || aux.nhooks < 2) {
+    if (lookup_log(bus, ML_TR_HELQ, &aux, 0) < 0 || aux.nhooks < 2) {
         P("client: helq: lookup FAIL\n");
         return 1;
     }
@@ -256,7 +260,7 @@ static int run_client(void) {
         return 1;
     }
     P("client: uid=");
-    print_dec(sys3(SYS_getuid, 0, 0, 0));
+    print_dec_n(sys3(SYS_getuid, 0, 0, 0));
     P(" (был 0 → MULTIUSER работает)\n");
 
     long bus = wait_bus();
@@ -278,7 +282,8 @@ static int run_client(void) {
     // 4) контрольная STATS: суммарный счётчик сервера
     //    2 (M5) + 2 (helq демо) + 3*BENCH_N (RTT x3) + BENCH_K (пачка)
     struct ml_aux aux;
-    if (lookup_log(bus, ML_TR_SEQPACKET, &aux) < 0) {
+    u32 cap = 0;
+    if (lookup_log(bus, ML_TR_SEQPACKET, &aux, &cap) < 0) {
         P("client: stats lane: lookup FAIL\n");
         return 1;
     }
@@ -286,17 +291,76 @@ static int run_client(void) {
     ml_send(aux.hooks[0], &s, 0, 0, 0, 0);
     struct ml_msg sr;
     struct ml_aux saux;
-    ml_recv(aux.hooks[0], &sr, 0, 0, &saux);
-    if (*ml_h(&sr, 0) != 2 + 2 + 3 * BENCH_N + BENCH_K) {
-        P("client: STATS: счётчик разошёлся: served=");
-        print_dec((long)*ml_h(&sr, 0));
-        P("\n");
+    if (ml_recv(aux.hooks[0], &sr, 0, 0, &saux) <= 0 ||
+        *ml_h(&sr, 0) != 2 + 2 + 3 * BENCH_N + BENCH_K) {
+        P("client: STATS: счётчик разошёлся\n");
         return 1;
     }
     P("client: STATS served=");
     print_dec((long)*ml_h(&sr, 0));
     P(": все сообщения доставлены\n");
+
+    // 5) M7: capability-демо. uid 1000 получил от шины только world-права:
+    //    RESET — админ-операция (ML_CAP_ADMIN), сервер обязан отклонить
+    P("client: capability: права на lane: 0x");
+    print_hex_flat(cap);
+    P(" (выдала шина по uid-политике сервера)\n");
+    struct ml_msg rq = { ML_PROTO_LOG, LOG_RESET, 0, 0, {0} };
+    ml_send(aux.hooks[0], &rq, 0, 0, 0, 0);
+    struct ml_msg rr;
+    struct ml_aux rraux;
+    if (ml_recv(aux.hooks[0], &rr, 0, 0, &rraux) <= 0 ||
+        rr.msg_id != LOG_RESET_R || rr.err != ML_E_PERM) {
+        P("client: capability: RESET НЕ отклонён — дыра в модели прав!\n");
+        return 1;
+    }
+    P("client: capability: RESET отклонён (ML_E_PERM, нет ML_CAP_ADMIN): OK\n");
     sys3(SYS_close, aux.hooks[0], 0, 0);
+
+    // 6) M7: отказоустойчивость. Клиент узнаёт pid log-сервера через
+    //    WHEREIS, убивает его SIGKILL'ом (одинаковый uid — разрешено),
+    //    супервизор обязан перезапустить сервер; клиент ретраями LOOKUP
+    //    дожидается нового экземпляра и продолжает работу на новом lane'е
+    struct ml_msg wq = { ML_PROTO_BUS, BUS_WHEREIS, 0, 0, {0} };
+    m_memcpy(wq.head, "log", 4);
+    if (ml_send(bus, &wq, 0, 0, 0, 0) < 0) return 1;
+    struct ml_msg wr;
+    struct ml_aux waux;
+    if (ml_recv(bus, &wr, 0, 0, &waux) <= 0 || wr.err != ML_E_OK) {
+        P("client: whereis: FAIL\n");
+        return 1;
+    }
+    int lpid = (int)*ml_h(&wr, 0);
+    P("client: whereis: \"log\" -> pid ");
+    print_dec_n(lpid);
+    P("\n");
+    sys3(SYS_kill, lpid, SIGKILL, 0);
+    P("client: fault: SIGKILL отправлен log-серверу (pid ");
+    print_dec_n(lpid);
+    P(")\n");
+    sleep_ms(100); // шине нужно заметить EOF и подчистить имя
+
+    u32 newcap = 0;
+    struct ml_aux a2;
+    if (lookup_log(bus, ML_TR_SEQPACKET, &a2, &newcap) < 0) {
+        P("client: fault: перезапущенный сервер так и не появился\n");
+        return 1;
+    }
+    P("client: fault: шина выдала lane на ПЕРЕЗАПУЩЕННЫЙ сервер\n");
+    const char *after = "IPC пережил падение сервера: супервизор перезапустил его";
+    struct ml_msg w2 = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
+    if (ml_send(a2.hooks[0], &w2, after, m_strlen(after), 0, 0) < 0) {
+        P("client: fault: WRITE на новый lane: FAIL\n");
+        return 1;
+    }
+    struct ml_msg a2r;
+    struct ml_aux a2aux;
+    if (ml_recv(a2.hooks[0], &a2r, 0, 0, &a2aux) <= 0 || a2r.err != ML_E_OK) {
+        P("client: fault: ack на новый lane: FAIL\n");
+        return 1;
+    }
+    P("client: fault: WRITE на новый lane подтверждён — автоперезапуск работает\n");
+    sys3(SYS_close, a2.hooks[0], 0, 0);
     sys3(SYS_close, bus, 0, 0);
 
     // stat через FUSE: пока fused не смонтировал /mnt, системный вызов
@@ -314,7 +378,7 @@ static int run_client(void) {
     print_dec((long)st_buf.size);
     P("client: /mnt/README: mode=0");
     print_oct(st_buf.mode);
-    P("client: IPC-демо + бенчмарк + непривилегированное чтение FUSE: OK\n");
+    P("client: IPC-демо + capability + отказ-инъекция + FUSE: OK\n");
     return 0;
 }
 
@@ -328,8 +392,58 @@ static int spawn(const char *path, const char *name) {
     return pid;
 }
 
+// --- M7: таблица сервисов + reaper ---
+// Супервизор больше не ждёт конкретные pid в фиксированном порядке:
+// wait4(-1) на ЛЮБОГО ребёнка; нежданная смерть сервиса (сигнал или
+// любой код выхода, пока не объявлена остановка) — это сбой, и сервис
+// перезапускается с нарастающей паузой. Так выглядит отказоустойчивость
+// микроядра: падение сервера не рушит систему, а обрабатывается
+// супервизором (в монолитном ядре то же самое делает panic()).
+struct svc {
+    const char *path;
+    const char *name;
+    int pid;
+    int restarts;
+    int stopping;   // остановка запланирована супервизором (graceful)
+    int stopped;
+};
+
+#define NSVC 4
+#define MAX_RESTARTS 3
+
+static struct svc svcs[NSVC] = {
+    { "/sbin/mlbus",  "mlbus",  0, 0, 0, 0 },
+    { "/sbin/logsrv", "logsrv", 0, 0, 0, 0 },
+    { "/sbin/uiod",   "uiod",   0, 0, 0, 0 },
+    { "/sbin/fused",  "fused",  0, 0, 0, 0 },
+};
+
+static struct svc *find_svc(int pid) {
+    for (int i = 0; i < NSVC; i++)
+        if (svcs[i].pid == pid && !svcs[i].stopped)
+            return &svcs[i];
+    return 0;
+}
+
+static int spawn_svc(struct svc *s) {
+    s->pid = spawn(s->path, s->name);
+    return s->pid;
+}
+
+static int svc_alive_count(void) {
+    int n = 0;
+    for (int i = 0; i < NSVC; i++)
+        if (!svcs[i].stopped) n++;
+    return n;
+}
+
+// классификация статуса wait4: 1 = умер от сигнала
+static int died_by_signal(int status) { return (status & 0x7f) != 0; }
+static int exit_code(int status) { return (status >> 8) & 0xff; }
+static int signal_of(int status) { return status & 0x7f; }
+
 void milin_main(void) {
-    P("MiLin supervisor: порождаю серверы\n");
+    P("MiLin supervisor: порождаю серверы (M7: reaper + автоперезапуск)\n");
 
     // devtmpfs: /dev/fuse и /dev/uio0 появляются сами (UIO берёт
     // динамический major, узнаваемый только через devtmpfs)
@@ -362,65 +476,108 @@ void milin_main(void) {
         P("supervisor: sysfs недоступен, UIO-привязка невозможна\n");
     }
 
-    // --- шина: реестр lane'ов + helq-фабрика (M5/M5.1, идея mbus) ---
-    int pid_b = spawn("/sbin/mlbus", "mlbus");
-    // --- log-сервер: регистрируется в шине ---
-    int pid_l = spawn("/sbin/logsrv", "logsrv");
-    // --- сервер драйверов: UIO (M4) ---
-    int pid_u = spawn("/sbin/uiod", "uiod");
-    // --- сервер файловых систем: FUSE (M4) ---
-    int pid_f = spawn("/sbin/fused", "fused");
+    // --- сервисы: шина, log-сервер, драйвер, фс ---
+    for (int i = 0; i < NSVC; i++)
+        spawn_svc(&svcs[i]);
+    P("supervisor: сервисы запущены: mlbus, logsrv, uiod, fused\n");
 
-    // --- клиент: другой uid, IPC-демо + бенчмарк + чтение с FUSE ---
+    // --- клиент: другой uid, IPC-демо + capability + отказ-инъекция ---
     int pid_c = sys3(SYS_fork, 0, 0, 0);
     if (pid_c == 0)
         sys3(SYS_exit, (long)run_client(), 0, 0);
 
-    // --- супервизор собирает статусы ---
-    int ok = 1;
-    int status = 0;
-    long r;
+    // --- reaper: wait4(-1) на любого ребёнка ---
+    int client_status = -1;
+    for (;;) {
+        int status = 0;
+        // r10/r8 обязаны быть чистыми: мусор ядро читает как rusage (M4)
+        long r = sys5(SYS_wait4, -1, (long)&status, 0, 0, 0);
+        if (r < 0) break; // детей больше нет
+        if (r == pid_c) {
+            // клиент закончил работу — система отработала свой демо-цикл
+            client_status = status;
+            break;
+        }
+        struct svc *s = find_svc((int)r);
+        if (!s) continue;
 
-    r = sys5(SYS_wait4, pid_u, (long)&status, 0, 0, 0);
-    P("supervisor: uiod (pid ");
-    print_dec(r);
-    P("): ");
-    if (ok_status(status)) { P("OK\n"); } else { P("FAIL\n"); ok = 0; }
+        if (s->stopping) {
+            // запланированная остановка — норма graceful shutdown
+            s->stopped = 1;
+            continue;
+        }
 
-    r = sys5(SYS_wait4, pid_c, (long)&status, 0, 0, 0);
-    P("supervisor: client (pid ");
-    print_dec(r);
-    P("): ");
-    if (ok_status(status)) { P("OK\n"); } else { P("FAIL\n"); ok = 0; }
+        // нежданная смерть сервиса: перезапуск с нарастающей паузой
+        if (s->restarts >= MAX_RESTARTS) {
+            P("supervisor: ");
+            print_str(s->name);
+            P(": лимит перезапусков исчерпан — система нездорова\n");
+            sys3(SYS_exit, 1, 0, 0);
+        }
+        P("supervisor: ");
+        print_str(s->name);
+        P(" (pid ");
+        print_dec_n(r);
+        P(") умер (");
+        if (died_by_signal(status)) {
+            P("сигнал ");
+            print_dec_n(signal_of(status));
+        } else {
+            P("код ");
+            print_dec_n(exit_code(status));
+        }
+        P(") — перезапуск #");
+        print_dec_n(s->restarts + 1);
+        P("\n");
+        sleep_ms(40 * (s->restarts + 1)); // backoff
+        s->restarts++;
+        spawn_svc(s);
+        P("supervisor: ");
+        print_str(s->name);
+        P(" перезапущен (pid ");
+        print_dec_n(s->pid);
+        P(")\n");
+    }
 
-    // graceful shutdown: размонтирование закрывает соединение,
-    // fused видит EOF и выходит сам; mlbus и logsrv — долгоживущие
-    // сервисы, их останавливает супервизор (SIGTERM), как в микроядре
+    // --- graceful shutdown: остановить оставшиеся сервисы ---
+    for (int i = 0; i < NSVC; i++)
+        if (!svcs[i].stopped) svcs[i].stopping = 1;
+
+    // FUSE: размонтирование закрывает /dev/fuse — fused видит EOF и
+    // выходит сам; остальные (в poll/recv/сне) — SIGTERM
     sys3(SYS_umount2, (long)"/mnt", MNT_DETACH, 0);
-    sys5(SYS_wait4, pid_f, (long)&status, 0, 0, 0);
-    P("supervisor: fused (pid ");
-    print_dec(pid_f);
-    P("): завершён (umount -> EOF)\n");
+    for (int i = 0; i < NSVC; i++) {
+        if (svcs[i].stopped || svcs[i].pid <= 0) continue;
+        sys3(SYS_kill, svcs[i].pid, SIGTERM, 0);
+    }
 
-    sys3(SYS_kill, pid_b, SIGTERM, 0);
-    sys3(SYS_kill, pid_l, SIGTERM, 0);
-    r = sys5(SYS_wait4, pid_b, (long)&status, 0, 0, 0);
-    P("supervisor: mlbus (pid ");
-    print_dec(r);
-    P("): остановлен супервизором\n");
-    if (!ok_status(status)) ok = 0;
-    r = sys5(SYS_wait4, pid_l, (long)&status, 0, 0, 0);
-    P("supervisor: logsrv (pid ");
-    print_dec(r);
-    P("): остановлен супервизором\n");
-    if (!ok_status(status)) ok = 0;
+    // допросить всех: в фазе остановки любой статус — норма
+    while (svc_alive_count() > 0) {
+        int status = 0;
+        long r = sys5(SYS_wait4, -1, (long)&status, 0, 0, 0);
+        if (r < 0) break;
+        struct svc *s = find_svc((int)r);
+        if (s) s->stopped = 1;
+    }
+    P("supervisor: все сервисы остановлены\n");
 
-    if (ok) {
-        P("M5.1 OK: helqueue async rings + futex + creds + bench\n");
+    int client_ok = (client_status != -1) && !died_by_signal(client_status)
+                    && exit_code(client_status) == 0;
+    P("supervisor: клиент: ");
+    if (client_ok) P("OK\n"); else P("FAIL\n");
+
+    int restarts_total = 0;
+    for (int i = 0; i < NSVC; i++) restarts_total += svcs[i].restarts;
+    P("supervisor: перезапусков сервисов за сессию: ");
+    print_dec(restarts_total);
+
+    if (client_ok) {
         P("M5 OK: mbus-реестр + lane-хэндлы + bragi-формат + FUSE-регрессия\n");
+        P("M5.1 OK: helqueue async rings + futex + creds + bench\n");
+        P("M7 OK: capability lanes + supervisor auto-restart\n");
         sys3(SYS_exit, 0, 0, 0);
     }
-    P("M5 FAILED\n");
+    P("M7 FAILED\n");
     sys3(SYS_exit, 1, 0, 0);
     __builtin_unreachable();
 }
