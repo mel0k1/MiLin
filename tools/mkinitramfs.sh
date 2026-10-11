@@ -16,7 +16,10 @@ gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/uiod userspace/uio
 gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/fused userspace/fused.c
 gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/client userspace/client.c
 gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/gpud userspace/gpud.c
+gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/netd userspace/netd.c
+gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/netclient userspace/netclient.c
 cp userspace/manifests/*.svc build/rootfs/etc/milin/
+cp userspace/manifests/pci.ids build/rootfs/etc/milin/
 # M8: glibc-клиент (динамический) + интерпретатор и libc в rootfs
 # M8.2: helq.h общий с nostdlib-миром — -DMILIN_GLIBC включает libc-шиму
 gcc -O2 -DMILIN_GLIBC -Iuserspace -o build/rootfs/sbin/gclient userspace/gclient.c
