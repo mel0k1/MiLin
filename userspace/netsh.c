@@ -329,9 +329,10 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
             sa ? (int)sa->sa_family : -1, k ? 1 : 0);
     if (!k) return real_connect(fd, sa, salen);
     if (sa->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
-    u32 ip;
-    memcpy(&ip, &((struct sockaddr_in *)sa)->sin_addr, 4);
-    u16 port = ((struct sockaddr_in *)sa)->sin_port;
+    // протокол NET_* хранит адреса в host-order (как netclient): у netd
+    // свой wbe32 на проводе, sockaddr же несёт network-order
+    u32 ip = ntohl(((struct sockaddr_in *)sa)->sin_addr.s_addr);
+    u16 port = ntohs(((struct sockaddr_in *)sa)->sin_port);
     pthread_mutex_lock(&tab_m);
     k->state = 1;
     pthread_mutex_unlock(&tab_m);
