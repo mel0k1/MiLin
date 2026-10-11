@@ -17,7 +17,8 @@ gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/fused userspace/fu
 gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs/sbin/client userspace/client.c
 cp userspace/manifests/*.svc build/rootfs/etc/milin/
 # M8: glibc-клиент (динамический) + интерпретатор и libc в rootfs
-gcc -O2 -Iuserspace -o build/rootfs/sbin/gclient userspace/gclient.c
+# M8.2: helq.h общий с nostdlib-миром — -DMILIN_GLIBC включает libc-шиму
+gcc -O2 -DMILIN_GLIBC -Iuserspace -o build/rootfs/sbin/gclient userspace/gclient.c
 mkdir -p build/rootfs/lib64 build/rootfs/lib/x86_64-linux-gnu
 for L in /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2; do
     [ -f "$L" ] && cp -L "$L" build/rootfs/lib64/ && break
