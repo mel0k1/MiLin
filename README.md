@@ -67,6 +67,8 @@ flowchart TB
 | M6 | Отчёт | честные метрики «до/после» ✅ |
 | M7 | Capability + выживание | права на lane'ах + автоперезапуск, revoke, каскад при смерти шины ✅ |
 | M8 | Большие сообщения + glibc | blob-путь в helq + динамический glibc-клиент ✅ |
+| M8.1 | Bulk IPC без потолка | сообщения до 128КБ цепочкой blob-слотов; фиксы flow-control, wake-гонки и геометрии региона ✅ |
+| M8.2 | glibc-стек целиком | helq/mmap/futex/fork/stdio из libc (общий helq.h с шимой -DMILIN_GLIBC) ✅ |
 | M9 | Kdriver-домен | драйвер «между ядром и userspace», размещение user/kernel ✅ |
 
 Подробности и критерии готовности — в [docs/roadmap.md](docs/roadmap.md).
@@ -205,6 +207,38 @@ cookie-оффсетами). Клиент пишет /mnt/note.txt, читает 
 что WRITE доехал до атрибутов (stat size=69). Права решает сервер:
 default_permissions выключен, README на запись не открывается
 (EACCES при OPEN). Лог бута — docs/boot-m52.log.
+
+
+## M8.1/M8.2 в двух словах: bulk и glibc
+
+**RU.** Восьмой этап довёл раздельные пути IPC до конца и закрыл три
+реальных бага. Bulk: сообщение крупнее одного blob-слота (32КБ) теперь едет
+цепочкой слотов до 128КБ — в очереди по-прежнему одна ссылка, потребитель
+читает zero-copy, `mlq_gather` собирает цепочку в непрерывный буфер.
+Исправления, найденные на этом пути: (1) pop свободной цепочки blob-слотов
+терял хвост (слоты утекали на конвейерах); (2) танец битов мог потерять
+пробуждение — значение для futex_wait теперь захватывается до проверки
+состояния; (3) заголовок региона перекрывался с чанком №1 (116 байт при
+MLQ_HDR_OFF=64) — элементы затирали ссылки blob-слотов. Плюс сервер освобождает
+запрос ДО выделения ресурсов ответа — иначе конвейер запирается. Клиент
+прогоняет WRITE 100КБ цепочкой и RTT 64КБ; счётчик сервера сходится до
+единого сообщения (966). M8.2: gclient собран с glibc и гоняет тот же стек
+очередей (общий helq.h, шима -DMILIN_GLIBC): mmap+futex RTT, bulk 100КБ,
+fork+waitpid, stdio поверх FUSE.
+
+**EN.** Milestone 8 finished the split-path IPC and fixed three real bugs.
+Bulk: messages larger than one blob slot (32КБ) now travel as slot chains up
+to 128КБ — one queue reference, zero-copy consumer, `mlq_gather` reassembles
+into a flat buffer. Fixes found on the way: (1) popping the blob free-list
+dropped the chain tail (slot leaks under pipelining); (2) the futex bit
+dance could lose a wakeup — the futex_wait value is now captured before the
+state check; (3) the region header overlapped chunk #1 (116 bytes vs
+MLQ_HDR_OFF=64) — elements clobbered blob-slot links. Also the server now
+releases the request BEFORE allocating response resources, otherwise the
+pipeline deadlocks. The client runs a 100КБ chained WRITE and a 64КБ RTT;
+the server counter matches to the last message (966). M8.2: gclient builds
+with glibc and drives the same queue stack (shared helq.h, -DMILIN_GLIBC
+shim): mmap+futex RTT, 100КБ bulk, fork+waitpid, stdio over FUSE.
 
 ## Лицензия
 
