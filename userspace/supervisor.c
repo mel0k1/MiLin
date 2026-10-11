@@ -45,6 +45,7 @@ struct svc {
     int restarts;
     int stopping;   // остановка запланирована супервизором (graceful)
     int stopped;
+    int done;       // oneshot завершился
 };
 
 #define MAX_RESTARTS 3
@@ -181,6 +182,15 @@ static struct svc *find_oneshot(void) {
         if (svcs[i].type == SVC_ONESHOT)
             return &svcs[i];
     return 0;
+}
+
+// сессия закончена, когда завершились ВСЕ oneshot'ы (не только первый):
+// демо-клиенты M5.2/M12 идут отдельными oneshot'ами в общем порядке
+static int all_oneshots_done(void) {
+    for (int i = 0; i < nsvcs; i++)
+        if (svcs[i].type == SVC_ONESHOT && !svcs[i].done)
+            return 0;
+    return 1;
 }
 
 static int spawn(const char *path, const char *name) {
@@ -536,11 +546,37 @@ void milin_main(void) {
     sys3(SYS_mkdir, (long)"/tmp", 0777, 0);
     sys3(SYS_chown, (long)"/tmp", 1000, 1000);
 
+    // PCI -> UIO: список пар "vendor device" из /etc/milin/pci.ids
+    // (по строке на устройство); файла нет — дефолт qemu pci-testdev
     long bfd = sys3(SYS_open, (long)"/sys/bus/pci/drivers/uio_pci_generic/new_id", O_WRONLY, 0);
     if (bfd >= 0) {
-        sys3(SYS_write, bfd, (long)"1b36 0005\n", 10);
-        sys3(SYS_close, bfd, 0, 0);
-        P("supervisor: pci-testdev отдан драйверу uio_pci_generic\n");
+        long ids = sys3(SYS_open, (long)"/etc/milin/pci.ids", O_RDONLY, 0);
+        if (ids >= 0) {
+            char b[512];
+            long n = sys3(SYS_read, ids, (long)b, sizeof(b) - 1);
+            sys3(SYS_close, ids, 0, 0);
+            if (n > 0) {
+                b[n] = 0;
+                long i = 0;
+                while (i < n) {
+                    long j = i;
+                    while (j < n && b[j] != '\n') j++;
+                    if (j > i) {
+                        b[j] = 0;
+                        if (b[i] != '#')
+                            sys3(SYS_write, bfd, (long)(b + i),
+                                 (unsigned)(j - i + 1));
+                    }
+                    i = j + 1;
+                }
+                P("supervisor: PCI-устройства из pci.ids отданы uio_pci_generic\n");
+            }
+            sys3(SYS_close, bfd, 0, 0);
+        } else {
+            sys3(SYS_write, bfd, (long)"1b36 0005\n", 10);
+            sys3(SYS_close, bfd, 0, 0);
+            P("supervisor: pci-testdev отдан драйверу uio_pci_generic\n");
+        }
     } else {
         P("supervisor: sysfs недоступен, UIO-привязка невозможна\n");
     }
@@ -584,49 +620,52 @@ void milin_main(void) {
         long r = sys5(SYS_wait4, -1, (long)&status, 0, 0, 0);
         if (r < 0) break; // детей больше нет
         if (client && r == client->pid) {
-            // oneshot закончил работу — система отработала свой демо-цикл
+            // статус первого oneshot — для итоговой строки "клиент: OK"
             client_status = status;
-            break;
         }
         struct svc *s = find_svc((int)r);
         if (!s) continue;
+        if (s->type == SVC_ONESHOT) s->done = 1;
 
         if (s->stopping) {
             // запланированная остановка — норма graceful shutdown
             s->stopped = 1;
-            continue;
-        }
-
-        // нежданная смерть сервиса: перезапуск с нарастающей паузой
-        if (s->restarts >= MAX_RESTARTS) {
+        } else if (s->type == SVC_ONESHOT) {
+            // oneshot закончил работу; сессия живёт, пока не завершатся ВСЕ
+            // (демо-клиенты M5.2/M12 идут отдельными oneshot'ами)
+            if (all_oneshots_done()) break;
+        } else {
+            // нежданная смерть сервиса: перезапуск с нарастающей паузой
+            if (s->restarts >= MAX_RESTARTS) {
+                P("supervisor: ");
+                print_str(s->name);
+                P(": лимит перезапусков исчерпан — система нездорова\n");
+                sys3(SYS_exit, 1, 0, 0);
+            }
             P("supervisor: ");
             print_str(s->name);
-            P(": лимит перезапусков исчерпан — система нездорова\n");
-            sys3(SYS_exit, 1, 0, 0);
+            P(" (pid ");
+            print_dec_n(r);
+            P(") умер (");
+            if (died_by_signal(status)) {
+                P("сигнал ");
+                print_dec_n(signal_of(status));
+            } else {
+                P("код ");
+                print_dec_n(exit_code(status));
+            }
+            P(") — перезапуск #");
+            print_dec_n(s->restarts + 1);
+            P("\n");
+            sleep_ms(40 * (s->restarts + 1)); // backoff
+            s->restarts++;
+            spawn_svc(s);
+            P("supervisor: ");
+            print_str(s->name);
+            P(" перезапущен (pid ");
+            print_dec_n(s->pid);
+            P(")\n");
         }
-        P("supervisor: ");
-        print_str(s->name);
-        P(" (pid ");
-        print_dec_n(r);
-        P(") умер (");
-        if (died_by_signal(status)) {
-            P("сигнал ");
-            print_dec_n(signal_of(status));
-        } else {
-            P("код ");
-            print_dec_n(exit_code(status));
-        }
-        P(") — перезапуск #");
-        print_dec_n(s->restarts + 1);
-        P("\n");
-        sleep_ms(40 * (s->restarts + 1)); // backoff
-        s->restarts++;
-        spawn_svc(s);
-        P("supervisor: ");
-        print_str(s->name);
-        P(" перезапущен (pid ");
-        print_dec_n(s->pid);
-        P(")\n");
     }
 
     // --- graceful shutdown: остановить оставшиеся сервисы ---
