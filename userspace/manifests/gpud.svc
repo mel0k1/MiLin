@@ -1,0 +1,6 @@
+# GPU-фасад amdgpu в user-placement: тот же mlgpu-протокол, что /dev/amdgpu
+name=gpud
+exec=/sbin/gpud
+type=service
+stop=term
+order=50

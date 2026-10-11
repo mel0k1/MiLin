@@ -66,6 +66,14 @@ static inline int ml_name_ok(const char *s) {
 #define LOG_RESET    8
 #define LOG_RESET_R  9
 
+// --- протокол GPU-фасада (ML_PROTO_GPU, M11) ---
+// tail запроса: [ op mlgpu ][ payload ]; ответ: payload или err.
+// placement=kernel — обслуживает kthread домена (/dev/amdgpu),
+// placement=user — демон gpud через lane "gpu.amdgpu".
+#define ML_PROTO_GPU 3
+#define GPU_REQ      1
+#define GPU_REQ_R    2
+
 // --- транспорт lane'а: head[2] в LookupRequest ---
 #define ML_TR_SEQPACKET 0    // AF_UNIX SOCK_SEQPACKET (M5)
 #define ML_TR_HELQ      1    // асинхронные очереди в разделяемой памяти (M5.1)
