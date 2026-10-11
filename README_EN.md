@@ -64,7 +64,11 @@ flowchart TB
 | M4 | Userspace-ization | drivers → UIO servers, filesystems → FUSE servers ✅ |
 | M5 | Microkernel IPC | mbus registry + lane handles + bragi messages ✅ |
 | M5.1 | Async queues | HelQueue in shared memory + futex + creds ✅ |
-| M6 | Report | honest before/after metrics |
+| M5.2 | Manifests + a real FUSE | service manifests instead of a table, FUSE_WRITE/READ + readdir ✅ |
+| M6 | Report | honest before/after metrics ✅ |
+| M7 | Capability + survival | lane rights + auto-restart, revoke, cascade on bus death ✅ |
+| M8 | Big messages + glibc | blob path in helq + dynamic glibc client ✅ |
+| M9 | Kdriver domain | a driver between kernel and userspace, user/kernel placement ✅ |
 
 Details and acceptance criteria — in [docs/roadmap.md](docs/roadmap.md)
 (in Russian, auto-translation works fine).
@@ -127,7 +131,8 @@ cpio curl qemu-system-x86`. The kernel and all tooling are x86_64.
 ├── tools/            # scripts: build, carve.sh (the knife), fix-dead-refs.py,
 │                     # mkinitramfs, run-qemu, size-report, tree-metrics
 ├── configs/          # milin.config — the kernel config constitution
-├── userspace/        # the /init supervisor and servers: fused (FUSE), uiod (UIO)
+├── userspace/        # the /init supervisor, servers (mlbus, logsrv, fused,
+│                     # uiod), client, service manifests /etc/milin/*.svc, ipc.h
 ├── docs/             # roadmap, boot logs, metrics, future report
 └── .github/          # CI: build from the carved tree + QEMU smoke test
 ```
@@ -188,6 +193,24 @@ seqpacket RTT 297.7K cycles → queue+futex 181.7K (×1.64) → poll+yield
 than an seqpacket RTT). Price: CONFIG_FUTEX = +8 KB of bzImage (+0.6%).
 Full analysis in `docs/metrics/m51.json`, boot log in
 `docs/boot-m51.log`.
+
+## M5.2 in a nutshell: manifests + a real FUSE
+
+The service table is no longer hardcoded in the supervisor: /etc/milin/*.svc
+are manifests (name/exec/type/stop/order). /init reads them with getdents64,
+sorts by order and spawns. A service = a file, no supervisor rebuild; the
+type defines the lifecycle (service — stopped with SIGTERM, oneshot — its
+exit status decides boot success), stop=umount — graceful shutdown via
+unmount (the server sees EOF and exits on its own). The demo client moved
+out of the supervisor into a separate /sbin/client binary.
+
+The FUSE server is a real filesystem now: OPEN/READ/WRITE (DIRECT_IO,
+bypassing the page cache), FLUSH/RELEASE, OPENDIR/READDIR (fuse_dirent
+with cookie offsets). The client writes /mnt/note.txt, reads it back with
+a byte-for-byte check, lists /mnt via getdents64 and verifies the WRITE
+reached the attributes (stat size=69). Permissions are the server's call:
+default_permissions is off, opening README for writing is refused by the
+server itself (EACCES at OPEN). Boot log: docs/boot-m52.log.
 
 ## License
 

@@ -63,7 +63,11 @@ flowchart TB
 | M4 | Userspace-изация | драйверы → UIO-серверы, ФС → FUSE-серверы ✅ |
 | M5 | Микроядерный IPC | mbus-реестр + lane-хэндлы + bragi-сообщения ✅ |
 | M5.1 | Асинхронные очереди | HelQueue в разделяемой памяти + futex + creds ✅ |
-| M6 | Отчёт | честные метрики «до/после» |
+| M5.2 | Манифесты + живой FUSE | сервисные манифесты вместо таблицы, FUSE_WRITE/READ + readdir ✅ |
+| M6 | Отчёт | честные метрики «до/после» ✅ |
+| M7 | Capability + выживание | права на lane'ах + автоперезапуск, revoke, каскад при смерти шины ✅ |
+| M8 | Большие сообщения + glibc | blob-путь в helq + динамический glibc-клиент ✅ |
+| M9 | Kdriver-домен | драйвер «между ядром и userspace», размещение user/kernel ✅ |
 
 Подробности и критерии готовности — в [docs/roadmap.md](docs/roadmap.md).
 
@@ -124,8 +128,8 @@ qemu-system-x86`. Ядро и все инструменты — x86_64.
 ├── tools/            # скрипты: build, carve.sh (резня), fix-dead-refs.py,
 │                     # mkinitramfs, run-qemu, size-report, tree-metrics
 ├── configs/          # milin.config — конституция конфигурации ядра
-├── userspace/        # супервизор /init и серверы: mlbus (реестр), logsrv,
-│                     # fused (FUSE), uiod (UIO), ipc.h (формат сообщений)
+├── userspace/        # супервизор /init, серверы (mlbus, logsrv, fused,
+│                     # uiod), клиент, манифесты /etc/milin/*.svc, ipc.h
 ├── docs/             # дорожная карта, логи бута, метрики, будущий отчёт
 └── .github/          # CI: сборка из обрезанного дерева + QEMU smoke-тест
 ```
@@ -183,6 +187,24 @@ RTT seqpacket 297.7K циклов → очередь+futex 181.7K (×1.64) →
 циклов/сообщение (в 58 раз дешевле RTT). Цена: CONFIG_FUTEX = +8 КБ
 bzImage (+0.6%). Полный разбор — `docs/metrics/m51.json`, лог бута —
 `docs/boot-m51.log`.
+
+## M5.2 в двух словах: манифесты + живой FUSE
+
+Таблица сервисов больше не зашита в супервизор: /etc/milin/*.svc —
+манифесты (name/exec/type/stop/order), /init читает их getdents64'ом,
+сортирует по order и порождает. Служба = файл, супервизор не
+пересобирается; тип определяет жизнь (service — глушится SIGTERM'ом,
+oneshot — его статус решает судьбу бута), stop=umount — graceful
+через размонтирование (сервер видит EOF и выходит сам). Демо-клиент
+уехал из супервизора в отдельный бинарник /sbin/client.
+
+FUSE-сервер стал полноценной ФС: OPEN/READ/WRITE (DIRECT_IO — мимо
+page cache), FLUSH/RELEASE, OPENDIR/READDIR (fuse_dirent с
+cookie-оффсетами). Клиент пишет /mnt/note.txt, читает обратно с
+побайтовой сверкой, перечисляет /mnt через getdents64 и проверяет,
+что WRITE доехал до атрибутов (stat size=69). Права решает сервер:
+default_permissions выключен, README на запись не открывается
+(EACCES при OPEN). Лог бута — docs/boot-m52.log.
 
 ## Лицензия
 
