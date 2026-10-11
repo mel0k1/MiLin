@@ -25,6 +25,7 @@ cp userspace/manifests/pci.ids build/rootfs/etc/milin/
 gcc -O2 -DMILIN_GLIBC -Iuserspace -o build/rootfs/sbin/gclient userspace/gclient.c
 # M12: socket-шима для динамического xbps (LD_PRELOAD) — сокеты уезжают
 # в netd через ML_PROTO_NET; против той же libc, что едет в гостя
+mkdir -p build/rootfs/lib
 gcc -shared -fPIC -O2 -o build/rootfs/lib/netsh.so userspace/netsh.c -lpthread -ldl
 mkdir -p build/rootfs/lib64 build/rootfs/lib/x86_64-linux-gnu
 for L in /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2; do
