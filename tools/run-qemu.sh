@@ -29,5 +29,6 @@ if grep -q "M11 OK" build/boot.log; then
     echo "BOOT OK"
     exit 0
 fi
-echo "BOOT FAILED — смотри build/boot.log"
+echo "BOOT FAILED — хвост boot.log:"
+tr -d '\000' < build/boot.log | tail -80
 exit 1
