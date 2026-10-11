@@ -610,6 +610,29 @@ static int run_client(void) {
     print_dec((long)st_buf.size);
     P("client: /mnt/README: mode=0");
     print_oct(st_buf.mode);
+
+    // M9.1: FUSE читает содержимое, а не только метаданные
+    long rfd = sys3(SYS_open, (long)"/mnt/README", 0 /*O_RDONLY*/, 0);
+    if (rfd < 0) {
+        P("client: open /mnt/README: FAIL\n");
+        return 1;
+    }
+    char fbuf[64];
+    long fn = sys3(SYS_read, rfd, (long)fbuf, sizeof(fbuf) - 1);
+    sys3(SYS_close, rfd, 0, 0);
+    if (fn <= 0) {
+        P("client: read /mnt/README: FAIL\n");
+        return 1;
+    }
+    fbuf[fn] = 0;
+    P("client: /mnt/README: ");
+    print_str(fbuf);
+    const char *want = "MiLin FUSE OK\n";
+    if ((long)m_strlen(want) != fn || m_strncmp(fbuf, want, fn) != 0) {
+        P("client: /mnt/README: содержимое не совпало\n");
+        return 1;
+    }
+    P("client: FUSE-регрессия + чтение содержимого: OK\n");
     P("client: IPC-демо + capability + отказ-инъекция + FUSE: OK\n");
     return 0;
 }
@@ -622,6 +645,98 @@ static int spawn(const char *path, const char *name) {
             sys3(SYS_exit, 127, 0, 0);
     }
     return pid;
+}
+
+// --- M9: kdriver-домен: драйвер «между ядром и userspace» ---
+// /dev/kdemo: write = запрос, read = ответ; обрабатывает не syscall-контекст,
+// а kthread домена (ring 0, свой pid). Размещение — политика: 'user' через
+// sysfs отдаёт драйвер userspace-серверу (UIO-путь), домен отклоняет запросы
+// (-ENODEV); 'kernel' возвращает драйвер в домен.
+static char kd_rbuf[256];
+
+static int kd_demo(void) {
+    long fd = sys3(SYS_open, (long)"/dev/kdemo", O_RDWR, 0);
+    if (fd < 0) {
+        P("kdriver: /dev/kdemo: FAIL (домен не зарегистрировал драйвер)\n");
+        return 1;
+    }
+
+    // эхо: запрос уезжает в домен и обрабатывается его kthread'ом
+    const char *req = "Ekdriver: echo через домен ядра";
+    long n = m_strlen(req);
+    if (sys3(SYS_write, fd, (long)req, n) != n) {
+        P("kdriver: write (echo): FAIL\n");
+        return 1;
+    }
+    long r = sys3(SYS_read, fd, (long)kd_rbuf, sizeof(kd_rbuf));
+    if (r != n - 1 || m_strncmp(kd_rbuf, req + 1, n - 1) != 0) {
+        P("kdriver: echo FAIL\n");
+        return 1;
+    }
+    P("kdriver: /dev/kdemo открыт, echo через домен ядра: OK\n");
+
+    // счётчик: 'C' -> u32 LE; состояние живёт в kthread'е домена
+    for (u32 i = 1; i <= 2; i++) {
+        if (sys3(SYS_write, fd, (long)"C", 1) != 1) {
+            P("kdriver: write (counter): FAIL\n");
+            return 1;
+        }
+        r = sys3(SYS_read, fd, (long)kd_rbuf, 4);
+        if (r != 4) {
+            P("kdriver: read (counter): FAIL\n");
+            return 1;
+        }
+        u32 v = (u8)kd_rbuf[0] | ((u8)kd_rbuf[1] << 8) |
+                ((u8)kd_rbuf[2] << 16) | ((u8)kd_rbuf[3] << 24);
+        if (v != i) {
+            P("kdriver: счётчик разошёлся\n");
+            return 1;
+        }
+    }
+    P("kdriver: счётчик домена 1 -> 2 (state живёт в kthread'е): OK\n");
+
+    // инфо: pid kthread'а виден userspace — обработка не в syscall-контексте
+    if (sys3(SYS_write, fd, (long)"I", 1) != 1 ||
+        sys3(SYS_read, fd, (long)kd_rbuf, sizeof(kd_rbuf) - 1) <= 0) {
+        P("kdriver: info FAIL\n");
+        return 1;
+    }
+    P("kdriver: ");
+    print_str(kd_rbuf);
+    P("\n");
+
+    // размещение на лету: 'user' — драйвер отдан userspace-серверу
+    long pf = sys3(SYS_open, (long)"/sys/class/mlkd/kdemo/placement", 1, 0);
+    if (pf < 0 || sys3(SYS_write, pf, (long)"user\n", 5) != 5) {
+        P("kdriver: placement=user: FAIL\n");
+        return 1;
+    }
+    sys3(SYS_close, pf, 0, 0);
+    if (sys3(SYS_write, fd, (long)"Etest", 5) != -19 /*ENODEV*/) {
+        P("kdriver: placement=user: запрос НЕ отклонён — дыра в политике!\n");
+        return 1;
+    }
+    P("kdriver: placement=user: домен отклоняет запросы (-ENODEV): OK\n");
+
+    // 'kernel' — драйвер снова в домене
+    pf = sys3(SYS_open, (long)"/sys/class/mlkd/kdemo/placement", 1, 0);
+    if (pf < 0 || sys3(SYS_write, pf, (long)"kernel\n", 7) != 7) {
+        P("kdriver: placement=kernel: FAIL\n");
+        return 1;
+    }
+    sys3(SYS_close, pf, 0, 0);
+    if (sys3(SYS_write, fd, (long)"Eok", 3) != 3) {
+        P("kdriver: write после возврата в домен: FAIL\n");
+        return 1;
+    }
+    r = sys3(SYS_read, fd, (long)kd_rbuf, 2);
+    if (r != 2 || kd_rbuf[0] != 'o' || kd_rbuf[1] != 'k') {
+        P("kdriver: echo после возврата в домен: FAIL\n");
+        return 1;
+    }
+    sys3(SYS_close, fd, 0, 0);
+    P("kdriver: placement=kernel: драйвер вернулся в домен: OK\n");
+    return 0;
 }
 
 // --- M7: таблица сервисов + reaper ---
@@ -709,6 +824,12 @@ void milin_main(void) {
     for (int i = 0; i < NSVC; i++)
         spawn_svc(&svcs[i]);
     P("supervisor: сервисы запущены: mlbus, logsrv, uiod, fused\n");
+
+    // --- M9: kdriver-домен (root: sysfs placement требует привилегий) ---
+    if (kd_demo()) {
+        P("M9 FAILED\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
 
     // --- клиент: другой uid, IPC-демо + capability + отказ-инъекция ---
     int pid_c = sys3(SYS_fork, 0, 0, 0);
@@ -807,9 +928,10 @@ void milin_main(void) {
         P("M7.1 OK: revoke capability on client death\n");
         P("M7.2 OK: bus-death cascade restart\n");
         P("M8 OK: blob path for large messages + glibc userspace\n");
+        P("M9 OK: kdriver domain — drivers between kernel and userspace\n");
         sys3(SYS_exit, 0, 0, 0);
     }
-    P("M8 FAILED\n");
+    P("M9 FAILED\n");
     sys3(SYS_exit, 1, 0, 0);
     __builtin_unreachable();
 }
