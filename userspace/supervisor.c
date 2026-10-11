@@ -34,7 +34,7 @@
 #define SVC_ONESHOT 1
 #define SVC_STOP_TERM   0
 #define SVC_STOP_UMOUNT 1
-#define SVC_MAX 8
+#define SVC_MAX 12
 
 struct svc {
     char name[16];

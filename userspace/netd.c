@@ -392,6 +392,7 @@ static void tcp_input(const u8 *ip, const u8 *t, u32 plen) {
             if (s->snd_win > 16384) s->snd_win = 16384;
             s->state = SS_EST;
             s->qn = 0;                                 // SYN подтверждён SYN-ACK'ом
+            P("netd: EST sid="); print_dec_n((long)(s - S)); P("\n");
             tcp_seg_tx(s, s->snd_nxt, 0, 0, F_ACK);
             push_msg((u32)(s - S), NET_CONNECT_R, 0, 0, 0);
             try_tx(s);                                 // данные, ушедшие в SYN
@@ -622,6 +623,9 @@ static void sk_connect(struct lane *ln, u32 sid, u32 rip, u16 rport) {
     s->state = SS_SYN;
     syn_tx(s);
     seg_queue(s, 0, 0, F_SYN);                 // SYN в ретрансмиссии (ARP/потери)
+    P("netd: CONNECT sid="); print_dec_n((long)sid);
+    P(" ip="); print_hex_flat(rip);
+    P(":"); print_dec_n((long)rport); P("\n");
     s->q[0].sent = 1;                          // syn_tx уже гонял кадр
     return;                                            // ответ — с SYN-ACK'ом
 out:
