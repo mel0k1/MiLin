@@ -75,11 +75,12 @@ CEC_CORE(+NOTIFIER), VIDEO, BACKLIGHT_CLASS_DEVICE, CRC16, SHMEM, NET_DEVMEM
 ## 4. Компиляция (проверка сборки)
 
 Проба сборки: `make O=... drivers/gpu/drm/amd/amdgpu/` на pristine v7.2
-с замыканием из п.2 — заголовки, ABI и зависимости amdgpu компилируются
-в этом окружении (объекты amdgpu_drv, amdgpu_vm_sdma, amdgpu_discovery,
-amdgpu_ras_eeprom и др.). Полный bzImage с amdgpu — вне бюджета дефолтной
-сборки MiLin (тысячи файлов, bzImage вырастет на мегабайты); контракт
-подтверждён на уровне замыкания Kconfig и компиляции объектов.
+с замыканием из п.2 — **amdgpu собрался полностью**: 893 объекта, 0 ошибок,
+финальный `AR drivers/gpu/drm/amd/amdgpu/built-in.a` (заголовки, ABI и все
+зависимости amdgpu работают в этом окружении). Полный bzImage с amdgpu —
+вне бюджета дефолтной сборки MiLin (тысячи файлов, bzImage вырастет на
+мегабайты); контракт подтверждён на уровне замыкания Kconfig и полной
+компиляции драйвера.
 
 Оговорка о железе: QEMU не эмулирует AMD GPU, поэтому runtime-смоук
 amdgpu возможен только на реальном железе (bzImage + CONFIG_DRM_AMDGPU).
