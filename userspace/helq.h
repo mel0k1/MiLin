@@ -28,22 +28,56 @@
 // данных нет (M7.1: потребитель проверяет, жив ли сосед по очереди —
 // смерть клиента в shm невидима, EOF тут не бывает).
 //
-// M8 — раздельные пути: мелкие сообщения едут inline в чанках, крупные
-// (до MLQ_BLOB) — через отдельные blob-слоты: producer один раз копирует
-// payload в слот, элемент несёт только ссылку, consumer читает прямо из
-// общей памяти (zero copy) и возвращает слот через mlq_consume. mlq_put
-// сам выбирает путь по размеру.
+// M8 — раздельные пути: мелкие сообщения едут inline в чанках, крупные —
+// через отдельные blob-слоты: producer один раз копирует payload в слот,
+// элемент несёт только ссылку, consumer читает прямо из общей памяти
+// (zero copy) и возвращает слот через mlq_consume. mlq_put сам выбирает
+// путь по размеру.
+// M8.1 — bulk без потолка одного слота: сообщение крупнее MLQ_BLOB едет
+// ЦЕПОЧКОЙ blob-слотов (до MLQ_MAXCHAIN штук = MLQ_BULK_MAX байт); сшитые
+// producer'ом ссылки живут в blob_next[], consumer собирает payload
+// mlq_gather'ом и возвращает всю цепочку одним mlq_consume.
 #ifndef MILIN_HELQ_H
 #define MILIN_HELQ_H
 
+// helq.h собирается в двух мирах: raw syscalls (nostdlib) и glibc
+// (-DMILIN_GLIBC, M8.2): весь код очередей общий, отличается только пол.
+#ifdef MILIN_GLIBC
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
+typedef unsigned long u64;
+typedef unsigned int u32;
+typedef unsigned char u8;
+// syscall() отвечает -1/errno, а raw-мир живёт на отрицательных errno:
+// держим одинаковый контракт, иначе код очередей разъедется
+static long ml_ret(long r) { return r < 0 ? -(long)errno : r; }
+static long sys3(long n, long a, long b, long c) { return ml_ret(syscall(n, a, b, c)); }
+static long sys5(long n, long a, long b, long c, long d, long e) { return ml_ret(syscall(n, a, b, c, d, e)); }
+static long sys6(long n, long a, long b, long c, long d, long e, long f) { return ml_ret(syscall(n, a, b, c, d, e, f)); }
+static void *m_memcpy(void *d, const void *s, unsigned n) { return memcpy(d, s, n); }
+static void *m_memset(void *d, int c, unsigned n) { return memset(d, c, n); }
+static int futex_wait(volatile int *u, int v) { return (int)ml_ret(syscall(SYS_futex, u, FUTEX_WAIT, v, 0, 0, 0)); }
+static int futex_wait_to(volatile int *u, int v, long ms) {
+    struct timespec t = { ms / 1000, (ms % 1000) * 1000000 };
+    return (int)ml_ret(syscall(SYS_futex, u, FUTEX_WAIT, v, &t, 0, 0));
+}
+static int futex_wake(volatile int *u) { return (int)ml_ret(syscall(SYS_futex, u, FUTEX_WAKE, 1, 0, 0, 0)); }
+#else
 #include "milin.h"
 #include "ipc.h"
+#endif
 
 // --- геометрия очереди ---
 #define MLQ_CHUNK    4096
 #define MLQ_NCHUNKS  8
 #define MLQ_NBLOBS   8
 #define MLQ_BLOB     32768
+#define MLQ_MAXCHAIN (MLQ_NBLOBS / 2)         // M8.1: слотов в цепочке на направление
+#define MLQ_BULK_MAX (MLQ_MAXCHAIN * MLQ_BLOB) // 128КБ: потолок bulk-сообщения
 #define MLQ_MAGIC    0x4D4C5132u   // "MLQ2"
 
 // флаги progress — как в managarm (kHelProgress*)
@@ -57,7 +91,8 @@
 #define MLQ_N_BLOB   (1 << 2)      // освобождён blob-слот (M8)
 
 // элемент: length-prefixed, как HelElement {length, opcode, context}
-// blob = 0: payload за заголовком; blob = N: payload в blob-слоте N (M8)
+// blob = 0: payload за заголовком; blob = N: payload в blob-слоте N,
+// при len > MLQ_BLOB слоты сшиты цепочкой через blob_next[] (M8.1)
 struct mlq_elem {
     u32 len;
     u32 opcode;
@@ -88,7 +123,11 @@ struct mlq_chunk {
     char buf[MLQ_CHUNK - 8];
 };
 
-#define MLQ_HDR_OFF  64      // заголовок выровнен на 64 (cache line)
+#define MLQ_HDR_OFF  128     // заголовок обязан целиком влезть ДО чанков:
+                             // mlq_pair = 116 байт с blob_next[] — при 64 чанк
+                             // №1 накладывался на blob_next[4..8] и затирал
+                             // ссылки слотов элементами (M5.1, стреляло при bulk)
+_Static_assert(sizeof(struct mlq_pair) <= MLQ_HDR_OFF, "mlq_pair overrun chunks");
 #define MLQ_BLOB_OFF (MLQ_HDR_OFF + MLQ_NCHUNKS * MLQ_CHUNK)
 #define MLQ_SIZE     (MLQ_BLOB_OFF + MLQ_NBLOBS * MLQ_BLOB)
 #define MLQ_INLINE_MAX (MLQ_CHUNK - 8 - (u32)sizeof(struct mlq_elem))
@@ -190,22 +229,24 @@ static void mlq_notify(volatile int *notify, int bit) {
 }
 
 // ожидание состояния *state != 0 с танцем битов (как wait_progress_futex
-// в managarm). Ключевой момент: ПРОТУХШИЙ бит (поставленный ранее, когда
-// состояние уже забрали) обязан сниматься при наблюдении пустого состояния,
-// иначе спящий будет ждать вечно — producer не будит, если бит уже стоит.
-// Поэтому: состояние пусто + бит стоит -> снять бит, перепроверить
-// состояние, и только потом парковаться.
+// в managarm). Два правила, чтобы не потерять пробуждение:
+//   1. значение для futex_wait захватывается ДО проверки состояния и
+//      парковка идёт ровно на нём: producer публикует состояние ДО бита
+//      (release), поэтому если бит увидели после захвата — состояние уже
+//      видно на перепроверке (x86-TSO: сторы не переупорядочиваются);
+//   2. протухший бит (поставленный, когда состояние уже забрали) снимается
+//      при наблюдении пустого состояния, иначе спящий ждёт вечно —
+//      producer не будит, если бит уже стоит.
 static int mlq_wait_state(volatile int *notify, int bit,
                            volatile int *state, int mode) {
     for (;;) {
         if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return 1;
-        int n = __atomic_load_n(notify, __ATOMIC_RELAXED);
-        if (n & bit) {
-            __atomic_fetch_and(notify, ~bit, __ATOMIC_ACQ_REL);
-            if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return 1;
-            continue; // бит снят: можно парковаться
-        }
         int val = __atomic_load_n(notify, __ATOMIC_RELAXED);
+        if (val & bit) {
+            __atomic_fetch_and(notify, ~bit, __ATOMIC_ACQ_REL);
+            continue; // бит снят: полный перепроверочный круг
+        }
+        if (__atomic_load_n(state, __ATOMIC_ACQUIRE)) return 1;
         if (mode == MLQ_FUTEX) {
             futex_wait(notify, val); // EAGAIN = значение сменилось: цикл
         } else if (mode == MLQ_WATCHDOG) {
@@ -224,11 +265,13 @@ struct mlq_out {
     int cur;                 // чанк в работе (0 = нет)
     u32 off;                 // смещение записи в cur->buf
     int enq;                 // сколько элементов в текущей партии (статистика)
-    int spare;               // остаток свободной цепочки (процесс-приватный)
+    int spare;               // остаток свободной цепочки чанков (процесс-приватный)
+    int bspare;              // остаток свободной цепочки blob-слотов (M8.1)
 };
 
 static void mlq_out_init(struct mlq_out *o, struct mlq_pair *p, int dir) {
-    o->p = p; o->dir = dir; o->cur = 0; o->off = 0; o->enq = 0; o->spare = 0;
+    o->p = p; o->dir = dir; o->cur = 0; o->off = 0; o->enq = 0;
+    o->spare = 0; o->bspare = 0;
 }
 
 static int mlq_flush(struct mlq_out *o);
@@ -279,26 +322,75 @@ static int mlq_put_elem(struct mlq_out *o, u32 opcode, const void *payload,
     return 0;
 }
 
-// резерв blob-слота (flow control: не больше NBLOBS/2 на направление)
+// M8.1: вернуть цепочку blob-слотов в свободный список своего направления
+// (один будильник на всю пачку; ссылки читаем ДО возврата — push их затрёт)
+static void mlq_free_blobs(struct mlq_pair *p, struct mlq_hdr *h, int head,
+                           int n) {
+    int idx = head;
+    for (int i = 0; i < n && idx; i++) {
+        int nxt = p->blob_next[idx];
+        mlq_push_blob(p, &h->blob_free, idx);
+        idx = nxt;
+    }
+    mlq_notify(&h->notify, MLQ_N_BLOB);
+}
+
+// резерв blob-слота (flow control: не больше NBLOBS/2 на направление).
+// M8.1: pop забирает ВСЮ цепочку — хвост обязан прятаться в bspare (как
+// spare у чанков), иначе слоты, возвращённые consumer'ом подряд, терялись
+// навсегда (вскрылось bulk-цепочкой: 4-й слот не возвращался — дедлок)
 static int mlq_take_blob(struct mlq_out *o, int mode) {
     struct mlq_hdr *h = &o->p->q[o->dir];
     for (;;) {
-        int idx = mlq_pop(&h->blob_free, o->p);
-        if (idx) return idx;
+        int idx = o->bspare;
+        if (idx) {
+            o->bspare = o->p->blob_next[idx];
+            return idx;
+        }
+        idx = mlq_pop(&h->blob_free, o->p);
+        if (idx) {
+            o->bspare = o->p->blob_next[idx];
+            return idx;
+        }
         mlq_wait_state(&h->notify, MLQ_N_BLOB, &h->blob_free, mode);
     }
 }
 
-// M8: путь выбирается по размеру — мелкие inline, крупные через blob-слот
+// M8/M8.1: путь по размеру — мелкие inline, крупные через blob-слот,
+// самые крупные (до MLQ_BULK_MAX) — цепочкой слотов
 static int mlq_put(struct mlq_out *o, u32 opcode, const void *payload, u32 len,
                    int mode) {
-    if (len > MLQ_BLOB) return -1;
+    if (len > MLQ_BULK_MAX) return -1;
     if (len > MLQ_INLINE_MAX) {
-        int b = mlq_take_blob(o, mode);
-        if (b < 0) return b;
-        m_memcpy(mlq_blob_at(o->p, b), payload, len);
-        int r = mlq_put_elem(o, opcode, 0, len, (u32)b, mode);
-        // payload уже в слоте: публикуем немедленно, иначе потребитель не
+        int ns = (int)((len + MLQ_BLOB - 1) / MLQ_BLOB);
+        int chain[MLQ_MAXCHAIN];
+        for (int i = 0; i < ns; i++) {
+            int b = mlq_take_blob(o, mode);
+            if (b < 0) {
+                // слоты, взятые до отказа, обязаны вернуться (иначе утечка)
+                for (int j = 0; j < i; j++)
+                    mlq_push_blob(o->p, &o->p->q[o->dir].blob_free, chain[j]);
+                if (i) mlq_notify(&o->p->q[o->dir].notify, MLQ_N_BLOB);
+                return b;
+            }
+            chain[i] = b;
+        }
+        // payload по слотам + сшить цепочку: ссылки едут ДО публикации
+        // элемента, consumer увидит их через acquire на progress-слово
+        u32 off = 0;
+        for (int i = 0; i < ns; i++) {
+            u32 n = len - off;
+            if (n > MLQ_BLOB) n = MLQ_BLOB;
+            m_memcpy(mlq_blob_at(o->p, chain[i]), (const char *)payload + off, n);
+            off += n;
+            o->p->blob_next[chain[i]] = (i + 1 < ns) ? chain[i + 1] : 0;
+        }
+        int r = mlq_put_elem(o, opcode, 0, len, (u32)chain[0], mode);
+        if (r < 0) {
+            mlq_free_blobs(o->p, &o->p->q[o->dir], chain[0], ns);
+            return r;
+        }
+        // payload уже в слотах: публикуем немедленно, иначе потребитель не
         // увидит элементы, а слоты кончатся — взаимоблокировка на пачках
         if (r == 0) mlq_flush(o);
         return r;
@@ -325,7 +417,8 @@ struct mlq_view {
     u32 opcode;
     u32 len;
     const void *payload;     // указатель В ОБЩУЮ память: действует до consume
-    u32 blob;                // 0 = inline, иначе номер blob-слота (M8)
+    u32 blob;                // 0 = inline, иначе головной blob-слот (M8)
+    u32 nslots;              // слотов в цепочке (M8.1): 1 = обычный blob
 };
 
 struct mlq_in {
@@ -340,14 +433,36 @@ static void mlq_in_init(struct mlq_in *in, struct mlq_pair *p, int dir) {
     in->p = p; in->dir = dir; in->cur = 0; in->off = 0; in->end = 0;
 }
 
-// вернуть producer'у blob-слот просмотренного элемента (для inline — no-op)
+// вернуть producer'у blob-слоты просмотренного элемента (для inline — no-op);
+// M8.1: цепочка возвращается целиком
 static void mlq_consume(struct mlq_in *in, struct mlq_view *v) {
     if (v->blob) {
-        struct mlq_hdr *h = &in->p->q[in->dir];
-        mlq_push_blob(in->p, &h->blob_free, (int)v->blob);
-        mlq_notify(&h->notify, MLQ_N_BLOB);
+        mlq_free_blobs(in->p, &in->p->q[in->dir], (int)v->blob, (int)v->nslots);
         v->blob = 0;
     }
+}
+
+// M8.1: payload из цепочки blob-слотов в непрерывный буфер (inline — просто
+// копия). Возвращает скопированные байты или -1 (буфер мал). Ссылки цепочки
+// уже проверены в mlq_next — выход за диапазон здесь невозможен.
+static long mlq_gather(struct mlq_in *in, struct mlq_view *v, void *dst,
+                       u32 cap) {
+    if (!v->blob) {
+        u32 n = v->len < cap ? v->len : cap;
+        m_memcpy(dst, v->payload, n);
+        return n;
+    }
+    if (v->len > cap) return -1;
+    u32 off = 0;
+    int idx = (int)v->blob;
+    for (u32 i = 0; i < v->nslots && off < v->len; i++) {
+        u32 n = v->len - off;
+        if (n > MLQ_BLOB) n = MLQ_BLOB;
+        m_memcpy((char *)dst + off, mlq_blob_at(in->p, idx), n);
+        off += n;
+        idx = in->p->blob_next[idx];
+    }
+    return (long)off;
 }
 
 // вернуть чанк producer'у (обработан) — flow control в обратную сторону
@@ -396,16 +511,34 @@ static int mlq_next(struct mlq_in *in, struct mlq_view *v, int mode) {
         v->opcode = e->opcode;
         v->len = e->len;
         v->blob = 0;
+        v->nslots = 0;
         if (e->blob) {
-            // M8: payload в blob-слоте; мусорные ссылки пропускаем целиком
+            // M8.1: payload в blob-слотах; мусорные ссылки пропускаем целиком
             int lo = (in->dir ? MLQ_NBLOBS / 2 : 0) + 1;
             int hi = lo + MLQ_NBLOBS / 2 - 1;
-            if (e->blob < (u32)lo || e->blob > (u32)hi || e->len > MLQ_BLOB) {
+            if (e->blob < (u32)lo || e->blob > (u32)hi ||
+                e->len > MLQ_MAXCHAIN * MLQ_BLOB) {
+                in->off = in->end;
+                continue;
+            }
+            int ns = (int)((e->len + MLQ_BLOB - 1) / MLQ_BLOB);
+            // цепочка обязана быть в диапазоне направления: проверяем все
+            // ссылки заранее, чтобы gather/consume могли верить цепочке
+            int idx = (int)e->blob;
+            for (int i = 1; i < ns; i++) {
+                idx = in->p->blob_next[idx];
+                if (idx < lo || idx > hi) {
+                    idx = 0;
+                    break;
+                }
+            }
+            if (ns > 1 && idx == 0) {
                 in->off = in->end;
                 continue;
             }
             v->payload = mlq_blob_at(in->p, (int)e->blob);
             v->blob = e->blob;
+            v->nslots = (u32)ns;
             return 1;
         }
         // inline: мусорный len от недобросовестного producer'а не читаем
@@ -414,6 +547,7 @@ static int mlq_next(struct mlq_in *in, struct mlq_view *v, int mode) {
             continue;
         }
         v->payload = e + 1;
+        v->nslots = 0;
         return 1;
     }
 }

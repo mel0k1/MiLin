@@ -176,39 +176,46 @@ static void serve_queue_lane(struct mlq_pair *p, u32 uid, u32 pid, u32 rights) {
             if (m->proto == ML_PROTO_LOG) {
                 // M7: per-op enforcement — права выдала шина (LaneRequest tail)
                 u32 need = need_cap(m->msg_id);
-                if (need && !(rights & need)) {
-                    cap_deny(m->msg_id, need, rights, &out, -1);
-                    mlq_consume(&in, &v);
+                int denied = need && !(rights & need);
+                u32 mid = m->msg_id;
+                u32 tlen = v.len - (u32)sizeof(struct ml_msg);
+                if (!denied) {
+                    if (mid == LOG_RESET) {
+                        P("log-srv: счётчик сброшен (ADMIN, uid ");
+                        print_dec_n(uid);
+                        P(", helq)\n");
+                        served = 0;
+                    }
+                    // tail элемента лежит сразу за bragi-сообщением (inline
+                    // — в чанке, крупный — в blob-слотах; указатель один)
+                    if (mid == LOG_WRITE) {
+                        log_print(uid, v.payload + sizeof(struct ml_msg), tlen);
+                        served++;
+                    } else if (mid == LOG_WRITEQ) {
+                        served++; // тихий WRITE бенчмарка: только счёт
+                    }
+                }
+                // M8.1: запрос освобождаем ДО ответа. Слоты/чанк запроса —
+                // ресурс того же пула, из которого берётся чанк ответа;
+                // ответ до освобождения = flow-control дедлок на конвейере
+                // (сервер ждёт чанк, клиент — ack, чанк вернёт только recv)
+                mlq_consume(&in, &v);
+                if (denied) {
+                    cap_deny(mid, need, rights, &out, -1);
                     continue;
                 }
-                if (m->msg_id == LOG_CLOSE) {
+                if (mid == LOG_CLOSE) {
                     // хвост: ack на CLOSE — и выходим (клиент завершает сессию)
                     struct ml_msg resp = { ML_PROTO_LOG, LOG_CLOSE_R, ML_E_OK, 0, {0} };
                     *ml_h(&resp, 0) = served;
                     mlq_put(&out, LOG_CLOSE_R, &resp, sizeof(resp), MLQ_FUTEX);
                     mlq_flush(&out);
-                    mlq_consume(&in, &v);
                     return;
                 }
-                if (m->msg_id == LOG_RESET) {
-                    P("log-srv: счётчик сброшен (ADMIN, uid ");
-                    print_dec_n(uid);
-                    P(", helq)\n");
-                    served = 0;
-                }
-                // tail элемента лежит сразу за bragi-сообщением (inline
-                // — в чанке, крупный — в blob-слоте; указатель один и тот же)
-                const char *tail = v.payload + sizeof(struct ml_msg);
-                u32 tlen = v.len - (u32)sizeof(struct ml_msg);
-                if (m->msg_id == LOG_WRITE) {
-                    log_print(uid, tail, tlen);
-                    served++;
-                } else if (m->msg_id == LOG_WRITEQ) {
-                    served++; // тихий WRITE бенчмарка: только счёт
-                }
-                log_ack(m->msg_id, tlen, &out, -1);
+                log_ack(mid, tlen, &out, -1);
                 // ответы публикуем сразу: клиент ждёт ack на каждый запрос
                 mlq_flush(&out);
+                continue;
             }
         }
         mlq_consume(&in, &v); // blob-слот вернуть producer'у (inline — no-op)

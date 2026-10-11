@@ -7,6 +7,7 @@
 //   * M7: capability (RESET отклонён без ML_CAP_ADMIN), отказ-инъекция
 //     SIGKILL'ом log-сервера, revoke lane'а мертвеца, каскад при смерти шины
 //   * M8: большой WRITE через blob-слот; glibc-клиент /sbin/gclient
+//   * M8.1: bulk без потолка одного слота — WRITE 100КБ цепочкой blob-слотов
 //   * M9.1: FUSE читает содержимое README
 //   * M5.2: FUSE_WRITE/READ на /mnt/note.txt + readdir по /mnt
 // Первым делом сбрасывает uid на 1000 (MULTIUSER).
@@ -30,6 +31,9 @@ static struct stat64 {
 #define BENCH_BN 64    // M8: RTT крупных (blob-слот)
 #define BENCH_TN 32    // M8: пачка крупных (flow control blob'ов)
 #define BENCH_BIG 20480 // M8: размер большого WRITE в демо
+#define BENCH_CN 32     // M8.1: RTT bulk-цепочкой
+#define BULK_BYTES 102400 // M8.1: bulk-демо WRITE (4 blob-слота)
+#define BENCH_CLEN 65536  // M8.1: bulk-RTT (3 blob-слота + заголовок)
 
 static inline u64 rdtsc(void) {
     u32 lo, hi;
@@ -245,6 +249,37 @@ static int demo_helq(long bus) {
     print_dec_n(dt / BENCH_TN);
     P(" cycles/msg (конвейер, 4 в полёте, n=32)\n");
 
+    // M8.1: bulk-путь — сообщение крупнее одного слота едет ЦЕПОЧКОЙ
+    // blob-слотов (до 128КБ); демо: WRITE 100КБ — это 4 слота, весь запас
+    // направления, в очереди по-прежнему одна ссылка
+    static u8 bulkbuf[sizeof(struct ml_msg) + BULK_BYTES];
+    m_memcpy(bulkbuf, &bw, sizeof(bw));
+    for (int i = 0; i < BULK_BYTES; i++)
+        bulkbuf[sizeof(bw) + i] = (u8)('a' + i % 26);
+    mlq_put(&out, LOG_WRITE, bulkbuf, sizeof(bw) + BULK_BYTES, MLQ_FUTEX);
+    MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
+    if (r->err != ML_E_OK) {
+        P("client: helq: bulk WRITE FAIL\n");
+        return 1;
+    }
+    P("client: helq: WRITE ");
+    print_dec_n(BULK_BYTES);
+    P(" байт уехал цепочкой из 4 blob-слотов (в очереди — одна ссылка)\n");
+
+    // RTT bulk-сообщением (64КБ = 3 слота + заголовок) — цена большого пути
+    m_memcpy(bulkbuf, &qb, sizeof(qb));
+    m_memset(bulkbuf + sizeof(qb), 'x', BENCH_CLEN);
+    sum = 0;
+    for (int i = 0; i < BENCH_CN; i++) {
+        t0 = rdtsc();
+        mlq_put(&out, LOG_WRITEQ, bulkbuf, sizeof(qb) + BENCH_CLEN, MLQ_FUTEX);
+        MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
+        sum += rdtsc() - t0;
+    }
+    P("ipc-bench: helq-bulk 64K rtt avg=");
+    print_dec_n(sum / BENCH_CN);
+    P(" cycles/msg (цепочка blob-слотов, n=32)\n");
+
     // RTT futex-режим: парковка настоящим futex
     sum = 0;
     for (int i = 0; i < BENCH_N; i++) {
@@ -398,8 +433,9 @@ static int run(void) {
     if (demo_seqpacket(bus, 1)) return 1;
 
     // 4) контрольная STATS: суммарный счётчик сервера
-    //    2 (M5) + 2 (helq демо) + 1 (big WRITE) + 3*BENCH_N (RTT x3)
-    //    + BENCH_K (пачка) + BENCH_BN (blob RTT) + BENCH_TN (blob пачка)
+    //    2 (M5) + 2 (helq демо) + 1 (big WRITE) + 1 (bulk WRITE)
+    //    + 3*BENCH_N (RTT x3) + BENCH_K (пачка) + BENCH_BN (blob RTT)
+    //    + BENCH_TN (blob пачка) + BENCH_CN (bulk RTT)
     struct ml_aux aux;
     u32 cap = 0;
     if (lookup_log(bus, ML_TR_SEQPACKET, &aux, &cap) < 0) {
@@ -411,7 +447,8 @@ static int run(void) {
     struct ml_msg sr;
     struct ml_aux saux;
     if (ml_recv(aux.hooks[0], &sr, 0, 0, &saux) <= 0 ||
-        *ml_h(&sr, 0) != 2 + 2 + 1 + 3 * BENCH_N + BENCH_K + BENCH_BN + BENCH_TN) {
+        *ml_h(&sr, 0) != 2 + 2 + 1 + 1 + 3 * BENCH_N + BENCH_K + BENCH_BN +
+                          BENCH_TN + BENCH_CN) {
         P("client: STATS: счётчик разошёлся\n");
         return 1;
     }
