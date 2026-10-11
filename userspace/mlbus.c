@@ -202,6 +202,7 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     const char *name = m->head;
     // transport в head-слоте 2 (слот 0-1 занимает имя, см. lookup_log)
     int transport = (int)*ml_h(m, 2);
+    if (!ml_name_ok(name)) return;
     struct reg *r = reg_by_name(name);
 
     if (!r) {
@@ -235,7 +236,7 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     // первое сообщение сервер получает с мусорными creds (unmapped uid).
     int sv[2];
     if (ml_socketpair(sv) < 0) {
-        struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, 2 /*E*/, 0, {0} };
+        struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_IO, 0, {0} };
         ml_send(client, &resp, 0, 0, 0, 0);
         return;
     }
@@ -260,7 +261,7 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         }
     }
     if (shm < 0 && transport == ML_TR_HELQ) {
-        struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, 3 /*E*/, 0, {0} };
+        struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_IO, 0, {0} };
         ml_send(client, &resp, 0, 0, 0, 0);
         sys3(SYS_close, sv[0], 0, 0);
         sys3(SYS_close, sv[1], 0, 0);
@@ -334,6 +335,16 @@ static int bus_msg(long c) {
     if (r <= 0) return 0;
 
     if (m.proto == ML_PROTO_BUS && m.msg_id == BUS_REGISTER) {
+        // имя обязано быть NUL-terminated в пределах head — иначе не имя
+        if (!ml_name_ok(m.head)) return 1;
+        if (reg_by_name(m.head)) {
+            P("mlbus: register ");
+            print_str(m.head);
+            P(": имя занято — отказ (ML_E_BUSY)\n");
+            struct ml_msg resp = { ML_PROTO_BUS, BUS_REGISTER_R, ML_E_BUSY, 0, {0} };
+            ml_send(c, &resp, 0, 0, 0, 0);
+            return 1;
+        }
         // M7: политика прав обязательна — tail = { world, root } (u32 x2)
         u32 masks[2] = { 0, 0 };
         if (m.tail_len >= sizeof(masks))
@@ -377,6 +388,7 @@ static int bus_msg(long c) {
     }
     if (m.proto == ML_PROTO_BUS && m.msg_id == BUS_WHEREIS) {
         // M7: pid сервера по имени — личность из creds при REGISTER
+        if (!ml_name_ok(m.head)) return 1;
         struct reg *r = reg_by_name(m.head);
         if (!r) {
             struct ml_msg resp = { ML_PROTO_BUS, BUS_WHEREIS_R,
@@ -429,9 +441,13 @@ void milin_main(void) {
         // новые соединения
         if (pfds[0].revents & POLLIN) {
             long c = ml_accept(lane);
-            if (c >= 0 && npfd < (int)(sizeof(pfds) / sizeof(pfds[0]))) {
-                ml_passcred(c); // флаг accepted-сокет не наследует
-                pfd_add(c);
+            if (c >= 0) {
+                if (npfd < (int)(sizeof(pfds) / sizeof(pfds[0]))) {
+                    ml_passcred(c); // флаг accepted-сокет не наследует
+                    pfd_add(c);
+                } else {
+                    sys3(SYS_close, c, 0, 0); // таблица полна — отказ, не утечка
+                }
             }
         }
 

@@ -16,6 +16,7 @@
 #define MILIN_IPC_H
 
 #include "milin.h"
+#include "mlproto.h"
 
 // --- syscall-номера (x86_64) ---
 #define SYS_socket    41
@@ -102,24 +103,6 @@ struct cmsghdr {
 #define CMSG_SPACE(a)   (CMSG_ALIGN(a) + CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_LEN(a)     (CMSG_ALIGN(sizeof(struct cmsghdr)) + (a))
 
-// --- формат сообщения (bragi-стиль) ---
-// один пакет SOCK_SEQPACKET = одно сообщение:
-//   [ struct ml_msg ][ tail: tail_len байт ]  (+ хэндлы в cmsg)
-// head — inline-поля фиксированного размера (как head(128) в bragi).
-// Трактовка полей head у каждого msg_id своя, см. протоколы ниже.
-
-#define ML_HEAD 24
-#define ML_MAXTAIL 256
-#define ML_MAXHOOKS 4
-
-struct ml_msg {
-    u32 proto;
-    u32 msg_id;
-    u32 err;        // 0 = OK, иначе код ошибки протокола
-    u32 tail_len;
-    char head[ML_HEAD];
-};
-
 // побочные данные recvmsg: hooks (SCM_RIGHTS) + creds (SCM_CREDENTIALS).
 // creds ставит ядро (SO_PASSCRED) — клиент их подделать не может.
 struct ml_aux {
@@ -129,31 +112,11 @@ struct ml_aux {
     int has_cred;
 };
 
-// inline-поля head как u64-слоты (bragi хранит скаляры в head)
-static inline u64 *ml_h(struct ml_msg *m, int i) { return (u64 *)(m->head + i * 8); }
-
-// коды ошибок — как enum Error в mbus.bragi
-#define ML_E_OK              0
-#define ML_E_NO_SUCH_ENTITY  1
-#define ML_E_PERM            2  // отказ по capability-политике (M7)
-
-// --- M7: capability-модель на lane'ах ---
-// lane-fd — непогашаемый хэндл (kernel object): подделать нельзя, передать
-// можно только через SCM_RIGHTS — это и есть передача capability, как в
-// seL4/Fuchsia. Права (маска битов) выдаёт ШИНА при создании lane'а:
-// сервер при REGISTER объявляет политику (какие права — root'у, какие —
-// остальным), шина проверяет kernel-верифицированный uid клиента и
-// доставляет маску ОБЕИМ сторонам. Сервер enforced'ит права на каждой
-// операции; шина — адмиссионный контроль (нет прав — нет и lane'а).
-#define ML_CAP_WRITE  (1u << 0)  // LOG_WRITE / LOG_WRITEQ
-#define ML_CAP_STATS  (1u << 1)  // LOG_STATS
-#define ML_CAP_CLOSE  (1u << 2)  // LOG_CLOSE (закрытие helq-сессии)
-#define ML_CAP_ADMIN  (1u << 3)  // LOG_RESET (админ-операция)
-
 // --- транспорт ---
 
 // абстрактное имя: namespace сокетов, файл в ФС не нужен
 static long ml_addr(struct sockaddr_un *a, const char *name) {
+    m_memset(a, 0, sizeof(*a)); // хвост адреса обязан быть нулями, а не стеком
     a->family = AF_UNIX;
     a->path[0] = 0;
     int i = 0;
@@ -245,7 +208,23 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
     if (aux) { aux->nhooks = 0; aux->has_cred = 0; }
     long r = sys3(SYS_recvmsg, fd, (long)&mh, 0);
     if (r <= 0) return (int)r;
-    if (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) return -1;
+    if (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
+        // сообщение не влезло: доставленные fd обязаны быть закрыты
+        char *c = cbuf, *end = cbuf + sizeof(cbuf);
+        while (c + sizeof(struct cmsghdr) <= end) {
+            struct cmsghdr *cm = (struct cmsghdr *)c;
+            if (cm->len < CMSG_LEN(4) || cm->len > CMSG_SPACE(ML_MAXHOOKS * 4)
+                || c + cm->len > end) break;
+            if (cm->level == SOL_SOCKET && cm->type == SCM_RIGHTS) {
+                int *f = (int *)(c + CMSG_ALIGN(sizeof(struct cmsghdr)));
+                int cnt = (int)((cm->len - CMSG_LEN(0)) / 4);
+                for (int i = 0; i < cnt && i < ML_MAXHOOKS; i++)
+                    sys3(SYS_close, f[i], 0, 0);
+            }
+            c += CMSG_ALIGN(cm->len);
+        }
+        return -1;
+    }
 
     if (r > (long)sizeof(*m)) m->tail_len = (u32)(r - sizeof(*m));
 
@@ -270,51 +249,6 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
     return (int)r;
 }
 
-// --- протокол реестра (ML_PROTO_BUS, идея mbus) ---
-// RegisterRequest  1 { head: name[24] }              сервер -> шина
-// RegisterResponse 2 { head: err }
-// LookupRequest    3 { head: name[24] }              клиент -> шина
-// LookupResponse   4 { head: err; hooks: [lane] }    шина -> клиент
-// LaneRequest      5 { hooks: [lane]; tail: rights } шина -> сервер
-// WhereisRequest    6 { head: name[24] }              клиент -> шина (M7)
-// WhereisResponse   7 { head: pid }                   шина -> клиент (M7)
-// RevokeRequest     8 { head: client_pid }            шина -> сервер (M7.1:
-//                    клиент умер — права на его lane'ы отозвать)
-
-#define ML_PROTO_BUS 1
-#define BUS_REGISTER   1
-#define BUS_REGISTER_R 2
-#define BUS_LOOKUP     3
-#define BUS_LOOKUP_R   4
-#define BUS_LANE_REQ   5
-#define BUS_WHEREIS    6
-#define BUS_WHEREIS_R  7
-#define BUS_REVOKE     8
-
-// --- протокол log-сервера (ML_PROTO_LOG) ---
-// WriteRequest  1 { tail: текст }                    клиент -> сервер
-// WriteResponse 2 { head: stored_len }
-// StatsRequest  3 { }
-// StatsResponse 4 { head: served }
-// CloseRequest  5 { }                                клиент -> сервер (helq)
-// CloseResponse 6 { head: served }
-// тихий WRITE для бенчмарка: считается, но не печатается в UART
-// ResetRequest  8 { }      админ-операция: сброс счётчика (M7, нужен ML_CAP_ADMIN)
-// ResetResponse 9 { head: served }
-
-#define ML_PROTO_LOG 2
-#define LOG_WRITE    1
-#define LOG_WRITE_R  2
-#define LOG_STATS    3
-#define LOG_STATS_R  4
-#define LOG_CLOSE    5
-#define LOG_CLOSE_R  6
-#define LOG_WRITEQ   7
-#define LOG_RESET    8
-#define LOG_RESET_R  9
-
-// --- транспорт lane'а: head[0] в LookupRequest ---
-#define ML_TR_SEQPACKET 0    // AF_UNIX SOCK_SEQPACKET (M5)
-#define ML_TR_HELQ      1    // асинхронные очереди в разделяемой памяти (M5.1)
+// протоколы (BUS_*/LOG_*/ML_TR_*) и формат ml_msg — в mlproto.h
 
 #endif
