@@ -74,6 +74,28 @@ static inline int ml_name_ok(const char *s) {
 #define GPU_REQ      1
 #define GPU_REQ_R    2
 
+// --- протокол сети (ML_PROTO_NET, M12) ---
+// сокет-плоскость userspace-стека: netd (e1000 поверх UIO + TCP/IP).
+// Запросы клиента приходят lane'ом, ответы — R-сообщения, данные
+// сервера — push'и (DATA/EOF) владельцу сокета.
+//   NET_OPEN    h[0]=type (1=TCP)          -> NET_OPEN_R    h[0]=sid
+//   NET_CONNECT h[0]=sid h[1]=ip h[2]=port -> NET_CONNECT_R h[0]=sid err
+//   NET_SEND    h[0]=sid tail=байты        -> NET_SEND_R
+//   NET_CLOSE   h[0]=sid                   -> NET_CLOSE_R
+//   NET_DATA / NET_EOF — push: h[0]=sid, tail=байты
+#define ML_PROTO_NET 4
+#define NET_OPEN      1
+#define NET_OPEN_R    2
+#define NET_CONNECT   3
+#define NET_CONNECT_R 4
+#define NET_SEND      5
+#define NET_SEND_R    6
+#define NET_CLOSE     7
+#define NET_CLOSE_R   8
+#define NET_DATA      9
+#define NET_EOF       10
+#define NET_CAP_OPEN (1u << 0)
+
 // --- транспорт lane'а: head[2] в LookupRequest ---
 #define ML_TR_SEQPACKET 0    // AF_UNIX SOCK_SEQPACKET (M5)
 #define ML_TR_HELQ      1    // асинхронные очереди в разделяемой памяти (M5.1)
