@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -291,6 +292,7 @@ static struct nsock *sock_by_fd(int fd) {
 // --- перехваты ---
 int socket(int domain, int type, int protocol) {
     init_once();
+    fprintf(stderr, "netsh: socket(%d,%d,%d) lane=%d\n", domain, type, protocol, lane);
     if ((domain != AF_INET && domain != 2) || lane < 0)
         return real_socket(domain, type, protocol);
     if (lane < 0) { errno = EAFNOSUPPORT; return -1; }
@@ -305,9 +307,11 @@ int socket(int domain, int type, int protocol) {
     memset(k, 0, sizeof(*k));
     k->used = 1;
     k->efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    fprintf(stderr, "netsh: slot=%d efd=%d\n", slot, k->efd);
     if (k->efd < 0) { k->used = 0; pthread_mutex_unlock(&tab_m); return -1; }
     pthread_mutex_unlock(&tab_m);
     int rc = net_rpc(NET_OPEN, 1 /*TCP*/, 0, 0, 0, 0, k, 5000);
+    fprintf(stderr, "netsh: NET_OPEN rc=%d efd=%d\n", rc, k->efd);
     if (rc != ML_E_OK) {
         pthread_mutex_lock(&tab_m);
         k->used = 0;
@@ -321,6 +325,8 @@ int socket(int domain, int type, int protocol) {
 
 int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
     struct nsock *k = sock_by_fd(fd);
+    fprintf(stderr, "netsh: connect(fd=%d fam=%d) k=%d\n", fd,
+            sa ? (int)sa->sa_family : -1, k ? 1 : 0);
     if (!k) return real_connect(fd, sa, salen);
     if (sa->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
     u32 ip;
@@ -331,6 +337,7 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
     pthread_mutex_unlock(&tab_m);
     // установление синхронно для клиента: NET_CONNECT_R придёт с SYN-ACK'ом
     int rc = net_rpc(NET_CONNECT, k->sid, ip, port, 0, 0, k, 15000);
+    fprintf(stderr, "netsh: connect rc=%d\n", rc);
     if (rc != ML_E_OK) {
         pthread_mutex_lock(&tab_m);
         k->state = 4;
@@ -472,6 +479,22 @@ int fcntl(int fd, int cmd, ...) {
     if (cmd == F_GETFL) return 0;
     if (cmd == F_SETFL) return 0;
     return 0;
+}
+
+// DEBUG: перехват getaddrinfo — что и почему резолвится
+static int (*real_getaddrinfo)(const char *, const char *,
+                               const struct addrinfo *, struct addrinfo **);
+int getaddrinfo(const char *host, const char *serv,
+                const struct addrinfo *hints, struct addrinfo **res) {
+    init_once();
+    if (!real_getaddrinfo)
+        real_getaddrinfo = dlsym(RTLD_NEXT, "getaddrinfo");
+    int rc = real_getaddrinfo(host, serv, hints, res);
+    fprintf(stderr, "netsh: getaddrinfo(%s, %s, fam=%d) rc=%d%s\n",
+            host ? host : "(null)", serv ? serv : "(null)",
+            hints ? hints->ai_family : 0, rc,
+            rc ? gai_strerror(rc) : "");
+    return rc;
 }
 
 int setsockopt(int fd, int level, int opt, const void *v, socklen_t l) {
