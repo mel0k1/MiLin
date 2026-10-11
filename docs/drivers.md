@@ -104,3 +104,35 @@ amdgpu возможен только на реальном железе (bzImage
 Домен даёт и изоляцию без перехода в userspace: у драйвера свой kthread,
 свой стек, счётчики и перезапуск при пробое — сбой amdgpu не тянет ядро,
 он перезапускается как сервис супервизора (по аналогии с logsrv).
+
+## 6. M11: mlkd-фасад amdgpu — запросная плоскость в домене
+
+Фасад — драйвер домена (`drivers/mlin/amdgpu-fac.c`, /dev/amdgpu), который
+принимает от клиентов микроядра протокол **mlgpu** (зеркала: форк
+`drivers/mlin/mlgpu.h` и MiLin `userspace/mlgpu.h`):
+
+| op | запрос | ответ | смысл |
+|----|--------|-------|-------|
+| I | — | `mlgpu_info_out` | имя/api/режим/VRAM/заборы |
+| A | `mlgpu_alloc_in` | `mlgpu_alloc_out` | буфер из пула VRAM (8 слотов по 1 МиБ) |
+| F | `mlgpu_free_in` | — | возврат слота |
+| S | `mlgpu_submit_in` + cmd[] | `mlgpu_submit_out` | коммит командного буфера -> забор |
+| W | `mlgpu_wait_in` | `mlgpu_wait_out` | состояние забора |
+
+Режимы фасада (лениво на первом INFO — amdgpu регистрирует pci-драйвер
+позже device_initcall): **facade** (diet-сборка, эмуляция), **amdgpu**
+(kdrv-сборка: драйвер builtin, устройства нет — запросная плоскость перед
+DRM), **hw** (AMD-устройство найдено — точка форвардинга в DRM/TTM).
+
+**Одна политика размещения — обе инкарнации.** placement=kernel: цикл
+запросов живёт в kthread домена (`/dev/amdgpu`, write=запрос, read=ответ).
+placement=user: домен отклоняет (-ENODEV, M9), а протокол обслуживает
+userspace-демон **gpud** через lane шины `gpu.amdgpu` (ML_PROTO_GPU, root-only
+политика) — тот же wire-формат, отдельный state, уступание дороге домену
+(ML_E_PERM) при возврате в kernel. Демо супервизора (docs/boot-m11.log):
+kernel-цикл -> flip user -> lane-цикл -> flip kernel -> gpud уступил.
+gpud переживает смерть шины каскадным перезапуском (state сохранён).
+
+kdrv-валидация: amdgpu-fac.o собран с конфигом PCI=y/DRM_AMDGPU=y
+(driver_find/pci_get_device в объекте); полный линк kdrv — как в M10.
+Бут-гейт diet-сборки: маркер **M11 OK**.
