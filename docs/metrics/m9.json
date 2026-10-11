@@ -1,0 +1,28 @@
+{
+  "milestone": "m9",
+  "date": "2026-10-11",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "kdriver-домен: драйверы «между ядром и userspace». Каждый драйвер домена — отдельный kthread (свой pid/стек, обработка НЕ в syscall-контексте) с очередью запросов; userspace общается через /dev/<name>: write = запрос (блокируется до обработки), read = ответ, буферы запроса/ответа до 4КБ. Размещение — политика: AUTO -> ядро; 'user' через /sys/class/mlkd/<name>/placement отдаёт драйвер userspace-серверу (UIO-путь, домен отклоняет запросы -ENODEV), 'kernel' возвращает в домен (стартует новый kthread). Жизненный цикл как у процесса: probe в kthread'е, при пробое backoff 2с и перезапуск по требованию (счётчик restarts в sysfs), pend-запросы при смерти домена получают -EIO. kdemo — образец (echo/счётчик u32/инфо с pid kthread'а) и бут-тест",
+  "kernel_contract_additions": {
+    "MILIN_KDRIVER": "домен драйверов: реестр, kthread-обработчики, char-dev /dev/<name> (динамический major, класс mlkd), sysfs {placement,state,requests,restarts}",
+    "MILIN_KDRIVER_DEMO": "kdemo: образец драйвера домена"
+  },
+  "bzImage_delta": "+4096 байт (+0.3%) — цена контракта M9: 1401856 -> 1405952",
+  "bzImage_bytes": 1405952,
+  "config_y_count": 478,
+  "boot_seconds": 2.5,
+  "boot_ok": true,
+  "boot_marker": "M9 OK + M8 OK + M7.2 OK + M7.1 OK + M7 OK + M5.1 OK + M5 OK",
+  "demo_evidence": {
+    "domain_thread": "mlkd: kdemo стартовал в домене ядра (kthread pid 17); инфо-запрос из userspace показывает 'kdemo: домен ядра, kthread pid=17, requests=3' — обработка не в syscall-контексте",
+    "echo": "write('E'+payload) -> read: payload вернулся",
+    "counter": "два 'C' -> u32 LE 1, 2 — state живёт в kthread'е",
+    "placement_user": "sysfs placement=user: домен отклоняет запрос (-ENODEV) — драйвер отдан userspace-серверу",
+    "placement_kernel": "sysfs placement=kernel: новый kthread (pid 23), драйвер снова обслуживает",
+    "regression": "M5/M5.1/M7/M7.1/M7.2/M8 гейты прошли в том же буте"
+  },
+  "m3_remainder": {
+    "uio": "CONFIG_MULTIUSER/FUSE_FS/UIO/UIO_PCI_GENERIC/PCI/DEVTMPFS/SYSFS вернулись ещё в M4; uiod (BAR0 через /dev/uio0) и fused (/mnt через /dev/fuse) живы в M9-буте — регрессия проходит",
+    "multiuser": "CONFIG_MULTIUSER=y в configs/milin.config (не milin_defconfig — файл называется milin.config)"
+  }
+}
