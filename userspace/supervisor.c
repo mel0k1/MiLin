@@ -38,14 +38,22 @@ static struct stat64 {
 } st_buf;
 
 // --- бенчмарк (M5.1): числа уезжают в docs/ отчёта M6 ---
-#define BENCH_N 256   // RTT-итераций на транспорт
-#define BENCH_K 64    // enqueue-пачка (один чанк = одна партия)
+#define BENCH_N 256    // RTT-итераций на транспорт
+#define BENCH_K 64     // enqueue-пачка (один чанк = одна партия)
+#define BENCH_BN 64    // M8: RTT крупных (blob-слот)
+#define BENCH_TN 32    // M8: пачка крупных (flow control blob'ов)
+#define BENCH_BIG 20480 // M8: размер большого WRITE в демо
 
 static inline u64 rdtsc(void) {
     u32 lo, hi;
     __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
     return ((u64)hi << 32) | lo;
 }
+
+// классификация статуса wait4: 1 = умер от сигнала
+static int died_by_signal(int status) { return (status & 0x7f) != 0; }
+static int exit_code(int status) { return (status >> 8) & 0xff; }
+static int signal_of(int status) { return status & 0x7f; }
 
 // дождаться шины (форк не гарантирует порядок старта)
 static long wait_bus(void) {
@@ -175,10 +183,11 @@ static int demo_helq(long bus) {
         for (;;) { \
             struct mlq_view _v; \
             mlq_next(&in, &_v, (mode)); \
-            if (_v.len < sizeof(struct ml_msg)) continue; \
+            if (_v.len < sizeof(struct ml_msg)) { mlq_consume(&in, &_v); continue; } \
             const struct ml_msg *_m = (const struct ml_msg *)_v.payload; \
-            if (_m->msg_id != (want)) continue; \
+            if (_m->msg_id != (want)) { mlq_consume(&in, &_v); continue; } \
             (outvar) = _m; \
+            mlq_consume(&in, &_v); \
             break; \
         } \
     } while (0)
@@ -202,8 +211,60 @@ static int demo_helq(long bus) {
     print_dec((long)*ml_h((struct ml_msg *)r, 0) % 1000000); // счётчик общий, покажем младшие
     P("\n");
 
+    u64 sum = 0, t0 = 0, dt = 0;
+
+    // M8: большой WRITE — tail 20КБ уезжает через blob-слот, в очереди
+    // только ссылка; сервер печатает первые 64 байта и размер
+    static u8 bigbuf[sizeof(struct ml_msg) + BENCH_BIG];
+    struct ml_msg bw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
+    m_memcpy(bigbuf, &bw, sizeof(bw));
+    for (int i = 0; i < BENCH_BIG; i++)
+        bigbuf[sizeof(bw) + i] = (u8)('A' + i % 26);
+    mlq_put(&out, LOG_WRITE, bigbuf, sizeof(bw) + BENCH_BIG, MLQ_FUTEX);
+    mlq_flush(&out);
+    MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
+    if (r->err != ML_E_OK) {
+        P("client: helq: big WRITE FAIL\n");
+        return 1;
+    }
+    P("client: helq: WRITE ");
+    print_dec_n(BENCH_BIG);
+    P(" байт уехал через blob-слот (в очереди — только ссылка)\n");
+
+    // M8: RTT крупного сообщения (ровно 32КБ через blob-слот: заголовок
+    // bragi внутри payload, поэтому tail = MLQ_BLOB - sizeof(ml_msg))
+    static u8 blobbuf[MLQ_BLOB];
+    struct ml_msg qb = { ML_PROTO_LOG, LOG_WRITEQ, 0, 0, {0} };
+    m_memcpy(blobbuf, &qb, sizeof(qb));
+    m_memset(blobbuf + sizeof(qb), 'x', MLQ_BLOB - sizeof(qb));
+    sum = 0;
+    for (int i = 0; i < BENCH_BN; i++) {
+        t0 = rdtsc();
+        mlq_put(&out, LOG_WRITEQ, blobbuf, MLQ_BLOB, MLQ_FUTEX);
+        mlq_flush(&out);
+        MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
+        sum += rdtsc() - t0;
+    }
+    P("ipc-bench: helq-blob 32K rtt avg=");
+    print_dec_n(sum / BENCH_BN);
+    P(" cycles/msg (blob-слот, n=64)\n");
+
+    // M8: конвейер крупных — 32КБ-сообщения с 4 в полёте (больше нельзя:
+    // blob-слотов и чанков ответов по 4, недренированные ответы = дедлок)
+    t0 = rdtsc();
+    for (int i = 0; i < BENCH_TN / 4; i++) {
+        for (int j = 0; j < 4; j++)
+            mlq_put(&out, LOG_WRITEQ, blobbuf, MLQ_BLOB, MLQ_FUTEX);
+        for (int j = 0; j < 4; j++)
+            MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
+    }
+    dt = rdtsc() - t0;
+    P("ipc-bench: helq-blob 32K pipe avg=");
+    print_dec_n(dt / BENCH_TN);
+    P(" cycles/msg (конвейер, 4 в полёте, n=32)\n");
+
     // RTT futex-режим: парковка настоящим futex
-    u64 sum = 0;
+    sum = 0;
     for (int i = 0; i < BENCH_N; i++) {
         u64 t0 = rdtsc();
         MLQ_SEND(LOG_WRITEQ, "x", 1, MLQ_FUTEX);
@@ -229,13 +290,13 @@ static int demo_helq(long bus) {
 
     // enqueue-пачка: K сообщений в один чанк одним flush — цена ассинхронной
     // постановки (у Managarm так ездят SQ-элементы: батчами, без ожидания)
-    u64 t0 = rdtsc();
+    t0 = rdtsc();
     for (int i = 0; i < BENCH_K; i++) {
         struct ml_msg w = { ML_PROTO_LOG, LOG_WRITEQ, 0, 0, {0} };
         mlq_put(&out, LOG_WRITEQ, &w, sizeof(w), MLQ_FUTEX);
     }
     mlq_flush(&out);
-    u64 dt = rdtsc() - t0;
+    dt = rdtsc() - t0;
     for (int i = 0; i < BENCH_K; i++)
         MLQ_RECV(LOG_WRITE_R, MLQ_FUTEX, r);
     P("ipc-bench: helq enqueue avg=");
@@ -283,7 +344,8 @@ static int run_client(void) {
     if (demo_seqpacket(bus, 1)) return 1;
 
     // 4) контрольная STATS: суммарный счётчик сервера
-    //    2 (M5) + 2 (helq демо) + 3*BENCH_N (RTT x3) + BENCH_K (пачка)
+    //    2 (M5) + 2 (helq демо) + 1 (big WRITE) + 3*BENCH_N (RTT x3)
+    //    + BENCH_K (пачка) + BENCH_BN (blob RTT) + BENCH_TN (blob пачка)
     struct ml_aux aux;
     u32 cap = 0;
     if (lookup_log(bus, ML_TR_SEQPACKET, &aux, &cap) < 0) {
@@ -295,7 +357,7 @@ static int run_client(void) {
     struct ml_msg sr;
     struct ml_aux saux;
     if (ml_recv(aux.hooks[0], &sr, 0, 0, &saux) <= 0 ||
-        *ml_h(&sr, 0) != 2 + 2 + 3 * BENCH_N + BENCH_K) {
+        *ml_h(&sr, 0) != 2 + 2 + 1 + 3 * BENCH_N + BENCH_K + BENCH_BN + BENCH_TN) {
         P("client: STATS: счётчик разошёлся\n");
         return 1;
     }
@@ -516,6 +578,23 @@ static int run_client(void) {
     sys3(SYS_close, caux.hooks[0], 0, 0);
     sys3(SYS_close, bus, 0, 0);
 
+    // 9) M8: glibc в userspace — динамический клиент (ld.so + libc.so.6:
+    //    ELF-интерпретатор, stdio, malloc) делает тот же IPC через шину
+    P("client: glibc: запускаю /sbin/gclient (динамический)\n");
+    int gpid = sys3(SYS_fork, 0, 0, 0);
+    if (gpid == 0) {
+        char *argv[] = { "gclient", 0 };
+        if (sys3(SYS_execve, (long)"/sbin/gclient", (long)argv, 0) != 0)
+            sys3(SYS_exit, 127, 0, 0);
+    }
+    int gst = 0;
+    sys5(SYS_wait4, gpid, (long)&gst, 0, 0, 0);
+    if (died_by_signal(gst) || exit_code(gst) != 0) {
+        P("client: glibc: gclient FAIL\n");
+        return 1;
+    }
+    P("client: glibc: gclient OK — динамический userspace работает\n");
+
     // stat через FUSE: пока fused не смонтировал /mnt, системный вызов
     // честно блокируется в ядре — супервизору не нужен сон (регрессия M4)
     for (int tries = 0; ; tries++) {
@@ -589,11 +668,6 @@ static int svc_alive_count(void) {
         if (!svcs[i].stopped) n++;
     return n;
 }
-
-// классификация статуса wait4: 1 = умер от сигнала
-static int died_by_signal(int status) { return (status & 0x7f) != 0; }
-static int exit_code(int status) { return (status >> 8) & 0xff; }
-static int signal_of(int status) { return status & 0x7f; }
 
 void milin_main(void) {
     P("MiLin supervisor: порождаю серверы (M7: reaper + автоперезапуск)\n");
@@ -732,9 +806,10 @@ void milin_main(void) {
         P("M7 OK: capability lanes + supervisor auto-restart\n");
         P("M7.1 OK: revoke capability on client death\n");
         P("M7.2 OK: bus-death cascade restart\n");
+        P("M8 OK: blob path for large messages + glibc userspace\n");
         sys3(SYS_exit, 0, 0, 0);
     }
-    P("M7.2 FAILED\n");
+    P("M8 FAILED\n");
     sys3(SYS_exit, 1, 0, 0);
     __builtin_unreachable();
 }
