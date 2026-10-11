@@ -1,0 +1,214 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+0EFC6D30+0EF06D30 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JLinux version 7.2.0+ (z@c-6acabb2d-14810412-583517db7178) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #2 PREEMPT Sat Oct 10 23:19:01 UTC 2026
+Command line: console=ttyS0 panic=-1
+BIOS-provided physical RAM map:
+BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff]  System RAM
+BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff]  device reserved
+BIOS-e820: [gap 0x00000000000a0000-0x00000000000effff]
+BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff]  device reserved
+BIOS-e820: [mem 0x0000000000100000-0x000000000ffdffff]  System RAM
+BIOS-e820: [mem 0x000000000ffe0000-0x000000000fffffff]  device reserved
+BIOS-e820: [gap 0x0000000010000000-0x00000000fffbffff]
+BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff]  device reserved
+BIOS-e820: [gap 0x0000000100000000-0x000000fcffffffff]
+BIOS-e820: [mem 0x000000fd00000000-0x000000ffffffffff]  device reserved
+NX (Execute Disable) protection: active
+APIC: Static calls initialized
+tsc: Fast TSC calibration using PIT
+tsc: Detected 3199.939 MHz processor
+last_pfn = 0xffe0 max_arch_pfn = 0x400000000
+x86/PAT: PAT support disabled because CONFIG_X86_PAT is disabled in the kernel.
+x86/PAT: Configuration [0-7]: WB  WT  UC- UC  WB  WT  UC- UC  
+found SMP MP-table at [mem 0x000f5480-0x000f548f]
+RAMDISK: [mem 0x0ffdb000-0x0ffdffff]
+Intel MultiProcessor Specification v1.4
+MPTABLE: OEM ID: BOCHSCPU
+MPTABLE: Product ID: 0.1         
+MPTABLE: APIC at: 0xFEE00000
+Intel MultiProcessor Specification v1.4
+MPTABLE: OEM ID: BOCHSCPU
+MPTABLE: Product ID: 0.1         
+MPTABLE: APIC at: 0xFEE00000
+Processor #0 (Bootup-CPU)
+IOAPIC[0]: apic_id 0, version 32, address 0xfec00000, GSI 0-23
+Processors: 1
+CPU topo: Max. logical packages:   1
+CPU topo: Max. logical nodes:      1
+CPU topo: Num. nodes per package:  1
+CPU topo: Max. logical dies:       1
+CPU topo: Max. dies per package:   1
+CPU topo: Max. threads per core:   1
+CPU topo: Num. cores per package:     1
+CPU topo: Num. threads per package:   1
+CPU topo: Allowing 1 present CPUs plus 0 hotplug CPUs
+[gap 0x10000000-0xfffbffff] available for PCI devices
+clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+Zone ranges:
+  DMA32    [mem 0x0000000000001000-0x000000000ffdffff]
+  Normal   empty
+Movable zone start for each node
+Early memory node ranges
+  node   0: [mem 0x0000000000001000-0x000000000009efff]
+  node   0: [mem 0x0000000000100000-0x000000000ffdffff]
+Initmem setup node 0 [mem 0x0000000000001000-0x000000000ffdffff]
+On node 0, zone DMA32: 1 pages in unavailable ranges
+On node 0, zone DMA32: 97 pages in unavailable ranges
+On node 0, zone DMA32: 32 pages in unavailable ranges
+Kernel command line: console=ttyS0 panic=-1
+printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+Dentry cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+Inode-cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+Built 1 zonelists, mobility grouping on.  Total pages: 65406
+mem auto-init: stack:off, heap alloc:off, heap free:off
+SLUB: HWalign=64, Order=0-1, MinObjects=0, CPUs=1, Nodes=1
+RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+NR_IRQS: 4352, nr_irqs: 48, preallocated irqs: 16
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+printk: legacy console [ttyS0] enabled
+APIC: Switch to symmetric I/O mode setup
+..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e20108f8f3, max_idle_ns: 440795338291 ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.87 BogoMIPS (lpj=12799756)
+Last level iTLB entries: 4KB 512, 2MB 255, 4MB 127
+Last level dTLB entries: 4KB 512, 2MB 255, 4MB 127, 1GB 0
+CPU: AMD QEMU Virtual CPU version 2.5+ (family: 0xf, model: 0x6b, stepping: 0x1)
+mitigations: Enabled attack vectors: SMT mitigations: off
+Spectre V2 : Vulnerable
+Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+x86/fpu: x87 FPU will use FXSAVE
+pid_max: default: 32768 minimum: 301
+Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+VFS: Finished mounting rootfs on nullfs
+Performance Events: PMU not available due to virtualization, using software events only.
+signal: max sigframe size: 1040
+Memory: 245812K/261624K available (4398K kernel code, 861K rwdata, 528K rodata, 588K init, 228K bss, 15112K reserved, 0K cma-reserved)
+devtmpfs: initialized
+futex hash table entries: 256 (6144 bytes on 1 NUMA nodes, total 6 KiB, linear).
+NET: Registered PF_NETLINK/PF_ROUTE protocol family
+PCI: Using configuration type 1 for base access
+PCI: Probing PCI hardware
+PCI host bridge to bus 0000:00
+pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+pci_bus 0000:00: root bus resource [mem 0x00000000-0xffffffffff]
+pci_bus 0000:00: No busn resource found for root bus, will use [bus 00-ff]
+pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+pci 0000:00:01.1: BAR 4 [io  0xc140-0xc14f]
+pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+pci 0000:00:02.0: [8086:100e] type 00 class 0x020000 conventional PCI endpoint
+pci 0000:00:02.0: BAR 0 [mem 0xfebc0000-0xfebdffff]
+pci 0000:00:02.0: BAR 1 [io  0xc100-0xc13f]
+pci 0000:00:02.0: ROM [mem 0xfeb80000-0xfebbffff pref]
+pci 0000:00:03.0: [1b36:0005] type 00 class 0x00ff00 conventional PCI endpoint
+pci 0000:00:03.0: BAR 0 [mem 0xfebe0000-0xfebe0fff]
+pci 0000:00:03.0: BAR 1 [io  0xc000-0xc0ff]
+pci_bus 0000:00: busn_res: [bus 00-ff] end is updated to 00
+pci 0000:00:01.0: PIIX/ICH IRQ router [8086:7000]
+e820: register RAM buffer resource [mem 0x0009fc00-0x0009ffff]
+e820: register RAM buffer resource [mem 0x0ffe0000-0x0fffffff]
+vgaarb: loaded
+clocksource: Switched to clocksource tsc-early
+NET: Registered PF_UNIX/PF_LOCAL protocol family
+pci_bus 0000:00: resource 4 [io  0x0000-0xffff]
+pci_bus 0000:00: resource 5 [mem 0x00000000-0xffffffffff]
+pci 0000:00:01.0: PIIX3: Enabling Passive Release
+pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+PCI: CLS 0 bytes, default 64
+Unpacking initramfs...
+platform rtc_cmos: registered fallback platform RTC device
+workingset: timestamp_bits=62 (anon: 57) max_order=16 bucket_order=0 (anon: 0)
+fuse: init (API version 7.45)
+Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+serial8250: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+Freeing initrd memory: 20K
+sched_clock: Marking stable (465620889, 16350953)->(485125932, -3154090)
+Freeing unused kernel image (initmem) memory: 588K
+Write protecting the kernel read-only data: 8192k
+Freeing unused kernel image (text/rodata gap) memory: 1744K
+Freeing unused kernel image (rodata/data gap) memory: 1520K
+Run /init as init process
+MiLin supervisor: порождаю серверы (M7: reaper + автоперезапуск)
+supervisor: devtmpfs смонтирован на /dev
+supervisor: sysfs смонтирован
+uio_pci_generic 0000:00:03.0: No IRQ assigned to device: no support for interrupts?
+supervisor: pci-testdev отдан драйверу uio_pci_generic
+supervisor: сервисы запущены: mlbus, logsrv, uiod, fused
+client: uid=1000 (был 0 → MULTIUSER работает)
+mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
+log-srv: привилегии сброшены (uid 1000)
+uiod: /dev/uio0 открыт, BAR0 замаплен
+uiod: BAR0[0] = 0x0
+uiod: userspace-драйвер говорит с PCI-устройством через UIO: OK
+uiod: жду событий устройства (остановка — SIGTERM супервизора)
+fused: /mnt смонтирован (fuse), жду запросы ядра
+log-srv: зарегистрирован в шине как "log"
+mlbus: register "log" (uid 1000, pid 18, world=0x00000007 root=0x0000000f)
+log-srv: lane: клиент uid 1000, права 0x00000007
+client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
+mlbus: lookup log: uid 1000, права 0x00000007
+log-srv: uid=1000: привет из MiLin: IPC в стиле bragi/mbus
+log-srv: uid=1000: серверы общаются сообщениями, а не вызовами ядра
+client: M5-регрессия (seqpacket WRITE x2 + ack): OK
+log-srv: lane: клиент uid 1000, права 0x00000007
+mlbus: lookup log: uid 1000, права 0x00000007 + helq-регион
+client: helq: lookup "log" -> lane + shm-регион очередей
+log-srv: uid=1000: асинхронные очереди в разделяемой памяти: zero copy
+log-srv: uid=1000: будильник — futex, ядро в data path не участвует
+client: helq: WRITE x2 напечатаны с uid, STATS served=4
+
+ipc-bench: helq-futex rtt avg=325781 cycles (парковка futex'ом, n=256)
+ipc-bench: helq-yield rtt avg=414505 cycles (поллинг+yield, n=256)
+ipc-bench: helq enqueue avg=76886 cycles/msg (пачка в один чанк, k=64)
+log-srv: helq-lane закрыт
+client: helq: демо + бенчмарк завершены, lane закрыт
+mlbus: lookup log: uid 1000, права 0x00000007
+log-srv: lane: клиент uid 1000, права 0x00000007
+client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
+ipc-bench: seqpacket rtt avg=629625 cycles (ядро в data path: sendmsg+recvmsg, n=256)
+mlbus: lookup log: uid 1000, права 0x00000007
+log-srv: lane: клиент uid 1000, права 0x00000007
+client: STATS served=836
+: все сообщения доставлены
+client: capability: права на lane: 0x00000007 (выдала шина по uid-политике сервера)
+log-srv: отказ msg 8: нет права 0x00000008 (lane 0x00000007)
+client: capability: RESET отклонён (ML_E_PERM, нет ML_CAP_ADMIN): OK
+mlbus: whereis "log" -> pid 18
+client: whereis: "log" -> pid 18
+client: fault: SIGKILL отправлен log-серверу (pid 18)
+supervisor: logsrv (pid 18) умер (сигнал 9) — перезапуск #1
+mlbus: сервер "log" отвалился, имя освобождено
+supervisor: logsrv перезапущен (pid 22)
+log-srv: привилегии сброшены (uid 1000)
+mlbus: register "log" (uid 1000, pid 22, world=0x00000007 root=0x0000000f)
+log-srv: зарегистрирован в шине как "log"
+log-srv: lane: клиент uid 1000, права 0x00000007
+mlbus: lookup log: uid 1000, права 0x00000007
+client: fault: шина выдала lane на ПЕРЕЗАПУЩЕННЫЙ сервер
+log-srv: uid=1000: IPC пережил падение сервера: супервизор перезапустил его
+client: fault: WRITE на новый lane подтверждён — автоперезапуск работает
+client: /mnt/README: size=13
+client: /mnt/README: mode=0100644
+client: IPC-демо + capability + отказ-инъекция + FUSE: OK
+fused: соединение закрыто, выхожу
+supervisor: все сервисы остановлены
+supervisor: клиент: OK
+supervisor: перезапусков сервисов за сессию: 1
+M5 OK: mbus-реестр + lane-хэндлы + bragi-формат + FUSE-регрессия
+M5.1 OK: helqueue async rings + futex + creds + bench
+M7 OK: capability lanes + supervisor auto-restart
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
+Kernel Offset: disabled

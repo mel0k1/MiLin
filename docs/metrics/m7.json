@@ -1,0 +1,28 @@
+{
+  "milestone": "m7",
+  "date": "2026-10-11",
+  "kernel": "7.2 (форк mel0k1/linux, ветка milin, база v7.2)",
+  "note": "capabilities на lane'ах + автоперезапуск серверов супервизором. lane-fd = непогашаемый хэндл (kernel object), SCM_RIGHTS = передача capability (seL4/Fuchsia-стиль). Сервер при REGISTER объявляет политику прав (tail: маски world/root), шина выдаёт lane по kernel-верифицированному uid (SO_PASSCRED) — адмиссионный контроль, маска доставляется обеим сторонам (LookupResponse head-слот 0 / LaneRequest tail). Сервер enforced'ит права per-op: WRITE/WRITEQ->ML_CAP_WRITE, STATS->ML_CAP_STATS, CLOSE->ML_CAP_CLOSE, RESET->ML_CAP_ADMIN; нарушение — ML_E_PERM. log-сервер: setuid(1000), наименьшие привилегии. Отказоустойчивость: супервизор на wait4(-1) (reaper), нежданная смерть сервиса = сбой -> лог + backoff (40мс*(n+1)) + перезапуск, лимит 3; graceful shutdown = stopping-флаг + SIGTERM/umount->EOF. Гонка мёртвого имени закрыта: LaneRequest уходит перед ответом клиенту, EPIPE -> NO_SUCH_ENTITY; MSG_NOSIGNAL в sendmsg — иначе SIGPIPE убил бы шину при LaneRequest мёртвому серверу. uiod стал долгоживущим (ждёт SIGTERM, как положено серверу-драйверу)",
+  "kernel_contract_additions": {},
+  "bzImage_delta": "0 байт — M7 целиком в userspace, ядро не пересобиралось",
+  "bzImage_bytes": 1401856,
+  "config_y_count": 476,
+  "boot_seconds": 1.8,
+  "boot_ok": true,
+  "boot_marker": "M7 OK + M5.1 OK + M5 OK",
+  "demo_evidence": {
+    "capability_grant": "uid 1000 -> права 0x7 (WRITE|STATS|CLOSE) по политике log-сервера (world), root получил бы 0xf",
+    "capability_deny": "RESET (нужно 0x8 ML_CAP_ADMIN) отклонён сервером: 'нет права 0x8 (lane 0x7)', ответ ML_E_PERM",
+    "fault_injection": "WHEREIS(log) -> pid 18; SIGKILL; супервизор: 'logsrv (pid 18) умер (сигнал 9) — перезапуск #1' -> pid 22; клиент ретраями LOOKUP дождался нового экземпляра, WRITE на новый lane подтверждён",
+    "privilege_drop": "log-сервер: setuid(1000) на старте — kill клиентом разрешён по одинаковому uid",
+    "stats_integrity": "served=836 = 2 (M5) + 2 (helq) + 3*256 (RTT x3) + 64 (пачка) — сошлось"
+  },
+  "ipc_bench": {
+    "note": "QEMU 10.0.13 TCG (без KVM), один vCPU, rdtsc; числа — для ОТНОСИТЕЛЬНОГО сравнения транспортов в одинаковых условиях, не абсолютные; TCG-шум выше, чем в прогоне M5.1 — data path в M7 не менялся; n=256 RTT, пачка k=64",
+    "seqpacket_rtt_avg_cycles": 545632,
+    "helq_futex_rtt_avg_cycles": 306609,
+    "helq_yield_rtt_avg_cycles": 439369,
+    "helq_enqueue_avg_cycles_per_msg": 253549,
+    "verdict": "helq-futex быстрее seqpacket в 1.8 раза — итог M5.1 воспроизвёлся после Capability-правок шины и сервера"
+  }
+}
