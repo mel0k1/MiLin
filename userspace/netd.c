@@ -655,6 +655,8 @@ static void sk_send(struct lane *ln, u32 sid, const u8 *d, u32 n) {
     s->snd_len += n;
     try_tx(s);
 out:
+    P("netd: SEND_R sid="); print_dec_n((long)sid);
+    P(" err="); print_dec_n((long)r.err); P("\n");
     ml_send(ln->fd, &r, 0, 0, 0, 0);
 }
 
