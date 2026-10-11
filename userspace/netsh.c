@@ -170,6 +170,8 @@ static void *reader(void *arg) {
         if (tlen > ML_MAXTAIL) tlen = ML_MAXTAIL;
         u32 sid = (u32)*ml_h(&m, 0);
 
+        fprintf(stderr, "netsh: reader msg id=%u sid=%u err=%u tlen=%u\n",
+                m.msg_id, sid, m.err, tlen);
         pthread_mutex_lock(&tab_m);
         struct nsock *k = 0;
         if (m.msg_id >= NET_OPEN_R && m.msg_id <= NET_CLOSE_R) {
@@ -320,6 +322,7 @@ int socket(int domain, int type, int protocol) {
         errno = rc == -2 ? ETIMEDOUT : EAFNOSUPPORT;
         return -1;
     }
+    k->sid = (u32)*ml_h(&k->resp, 0);      // идентификатор на стороне netd
     return k->efd;
 }
 
