@@ -457,6 +457,16 @@ void milin_main(void) {
         P("M7.2 OK: bus-death cascade restart\n");
         P("M8 OK: blob path for large messages + glibc userspace\n");
         P("M9 OK: kdriver domain — drivers between kernel and userspace\n");
+        // M10: amdgpu в ядре виден как built-in модуль в /sys/module/amdgpu
+        {
+            long fd = sys3(SYS_open, (long)"/sys/module/amdgpu", 0, 0);
+            if (fd >= 0) {
+                sys3(SYS_close, fd, 0, 0);
+                P("M10 OK: amdgpu в ядре (kdrv-сборка; в QEMU нет AMD-железа)\n");
+            } else {
+                P("kdrv: amdgpu нет в ядре (diet-сборка) — норма\n");
+            }
+        }
         sys3(SYS_exit, 0, 0, 0);
     }
     P("M9 FAILED\n");
