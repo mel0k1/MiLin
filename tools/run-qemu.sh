@@ -1,6 +1,6 @@
 #!/bin/sh
-# бут-тест M5.2: qemu грузит ядро; супервизор читает манифесты /etc/milin,
-# порождает сервисы и client; после "M9 OK" /init выходит,
+# бут-тест: qemu грузит ядро; супервизор читает манифесты /etc/milin,
+# порождает сервисы и client; после "M11 OK" /init выходит,
 # паника ядра при panic=-1 и -no-reboot завершает qemu без kill'ов.
 # pci-testdev — железо для uiod (драйвер в userspace, шина в ядре).
 set -e
@@ -25,7 +25,7 @@ done
     -device pci-testdev \
     -kernel build/bzImage -initrd build/initramfs.cpio.gz \
     -append "console=ttyS0 panic=-1" < /dev/null > build/boot.log
-if grep -q "M9 OK" build/boot.log; then
+if grep -q "M11 OK" build/boot.log; then
     echo "BOOT OK"
     exit 0
 fi
