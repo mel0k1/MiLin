@@ -456,10 +456,13 @@ static void ip_input(const u8 *f, u32 n) {
     const u8 *ip = f + ETH_HDR;
     u32 dst = rbe32(ip + 16);
     if (dst != NET_MY_IP) return;
+    // длина — из IP total length: slirp добивает короткие кадры нулями
+    // до 60 байт (Ethernet минимум), нули не должны попадать в поток
     u32 plen = (u32)((ip[2] << 8) | ip[3]);
+    u32 ihl = (u32)(ip[0] & 0x0F) * 4;
+    if (plen < ihl || plen > n - ETH_HDR) plen = n - ETH_HDR;
     if (ip[9] == 1) icmp_input(ip, plen);
-    else if (ip[9] == 6) tcp_input(ip, ip + (ip[0] & 0x0F) * 4,
-                                   plen - (ip[0] & 0x0F) * 4);
+    else if (ip[9] == 6) tcp_input(ip, ip + ihl, plen - ihl);
 }
 
 static int nic_init(void) {
