@@ -398,6 +398,13 @@ static int bus_msg(long c) {
 }
 
 void milin_main(void) {
+    // M7.2: наименьшие привилегии — шине не нужен root (bind абстрактный,
+    // shm в /tmp с 0777). Заодно клиент того же uid может убить её в демо
+    // каскада — kill разрешён между процессами одного uid
+    if (sys3(SYS_setuid, 1000, 0, 0) != 0) {
+        P("mlbus: setuid(1000): FAIL\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
     long lane = ml_listen("milin-bus");
     if (lane < 0) {
         P("mlbus: bind @milin-bus: FAIL\n");

@@ -59,6 +59,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_getuid    102
 #define SYS_setuid    105
 #define SYS_mkdir     83
+#define SYS_chown     92
 #define SYS_mknod     133
 #define SYS_mount     165
 #define SYS_umount2   166

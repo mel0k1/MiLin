@@ -268,6 +268,9 @@ static int run_client(void) {
         P("client: IPC: шина не отвечает\n");
         return 1;
     }
+    // M7.2: SO_PASSCRED на моём конце — ядро прикладывает к ответам шины
+    // ЕЁ pid: узнаю, кого убивать в демо каскада, у самой шины не спрашивая
+    ml_passcred(bus);
 
     // 1) M5-регрессия: seqpacket-обмен (без бенчмарка)
     if (demo_seqpacket(bus, 0)) return 1;
@@ -299,6 +302,8 @@ static int run_client(void) {
     P("client: STATS served=");
     print_dec((long)*ml_h(&sr, 0));
     P(": все сообщения доставлены\n");
+    // M7.2: pid шины — из kernel-creds на её ответах (подделать нельзя)
+    u32 bus_pid = aux.has_cred ? aux.cred.pid : 0;
 
     // 5) M7: capability-демо. uid 1000 получил от шины только world-права:
     //    RESET — админ-операция (ML_CAP_ADMIN), сервер обязан отклонить
@@ -436,9 +441,79 @@ static int run_client(void) {
         }
         break;
     }
+    // чистое завершение helq-сессии: без CLOSE сервер так и сидел бы в
+    // serve_queue_lane живого родителя и не увидел бы смерть шины (M7.2)
+    static u8 cbuf2[sizeof(struct ml_msg)];
+    struct ml_msg cl = { ML_PROTO_LOG, LOG_CLOSE, 0, 0, {0} };
+    m_memcpy(cbuf2, &cl, sizeof(cl));
+    mlq_put(&nout, LOG_CLOSE, cbuf2, sizeof(cl), MLQ_FUTEX);
+    mlq_flush(&nout);
+    for (;;) {
+        struct mlq_view cv;
+        mlq_next(&nin, &cv, MLQ_FUTEX);
+        if (cv.len < sizeof(struct ml_msg)) continue;
+        const struct ml_msg *cm = (const struct ml_msg *)cv.payload;
+        if (cm->msg_id != LOG_CLOSE_R) continue;
+        break;
+    }
     sys6(SYS_munmap, (long)np, MLQ_SIZE, 0, 0, 0, 0);
     sys3(SYS_close, nxaux.hooks[0], 0, 0);
     P("client: revoke: права мертвеца отозваны, сервер обслужил новый lane: OK\n");
+
+    // 8) M7.2: каскад при смерти шины. Шина — TCB, но её смерть — не
+    //    конец: супервизор перезапускает шину, log-сервер сам встаёт в
+    //    строй (его state — его собственный), клиент переподключается
+    P("client: cascade: убиваю ШИНУ (pid ");
+    print_dec_n(bus_pid);
+    P(") — система должна самоисцелиться\n");
+    sys3(SYS_kill, bus_pid, SIGKILL, 0);
+    // SIGKILL не мгновенен: пока ядро не добьёт процесс, его слушатель
+    // ещё открыт и конн туда «успешен». Жду ESRCH (смерть+реап — супервизор),
+    // после него подключиться можно только к НОВОЙ шине
+    for (int i = 0; i < 200; i++) {
+        if (sys3(SYS_kill, bus_pid, 0, 0) != 0) break;
+        sleep_ms(10);
+    }
+    sys3(SYS_close, bus, 0, 0); // конн умер вместе с шиной
+    bus = wait_bus();
+    if (bus < 0) {
+        P("client: cascade: шина не вернулась\n");
+        return 1;
+    }
+    P("client: cascade: шина перезапущена супервизором, клиент переподключился\n");
+
+    // перерегистрировавшийся log-сервер обязан быть в новой шине
+    struct ml_aux caux;
+    u32 ccap = 0;
+    if (lookup_log(bus, ML_TR_SEQPACKET, &caux, &ccap) < 0) {
+        P("client: cascade: перерегистрировавшийся сервер не найден\n");
+        return 1;
+    }
+    P("client: cascade: log-сервер перерегистрировался в новой шине\n");
+    const char *cmsg = "шина умерла — IPC пережил каскадный перезапуск";
+    struct ml_msg cw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
+    if (ml_send(caux.hooks[0], &cw, cmsg, m_strlen(cmsg), 0, 0) < 0) {
+        P("client: cascade: WRITE FAIL\n");
+        return 1;
+    }
+    struct ml_msg cwr;
+    struct ml_aux cwaux;
+    if (ml_recv(caux.hooks[0], &cwr, 0, 0, &cwaux) <= 0 || cwr.err != ML_E_OK) {
+        P("client: cascade: ack FAIL\n");
+        return 1;
+    }
+    // контроль state: 1 (после смерти сервера) + 1 (жертва) + 1 (revoke-lane)
+    // + 1 (каскадный WRITE); счётчик пережил и ту, и другую смерть
+    struct ml_msg cs = { ML_PROTO_LOG, LOG_STATS, 0, 0, {0} };
+    ml_send(caux.hooks[0], &cs, 0, 0, 0, 0);
+    struct ml_msg csr;
+    struct ml_aux csaux;
+    if (ml_recv(caux.hooks[0], &csr, 0, 0, &csaux) <= 0 || *ml_h(&csr, 0) != 4) {
+        P("client: cascade: счётчик разошёлся (ожидал 4)\n");
+        return 1;
+    }
+    P("client: cascade: STATS served=4 — state пережил смерть сервера и шины: OK\n");
+    sys3(SYS_close, caux.hooks[0], 0, 0);
     sys3(SYS_close, bus, 0, 0);
 
     // stat через FUSE: пока fused не смонтировал /mnt, системный вызов
@@ -542,8 +617,10 @@ void milin_main(void) {
     if (sysfs_ok == 0) P("supervisor: sysfs смонтирован\n");
 
     // /tmp под shm-регионы очередей (ramfs: имя нужно только на момент
-    // раздачи fd, после unlink объект живёт в памяти)
-    sys3(SYS_mkdir, (long)"/tmp", 0755, 0);
+    // раздачи fd, после unlink объект живёт в памяти). chown: шина после
+    // setuid(1000) (M7.2) создаёт там регионы, а mkdir режется umask'ом
+    sys3(SYS_mkdir, (long)"/tmp", 0777, 0);
+    sys3(SYS_chown, (long)"/tmp", 1000, 1000);
 
     long bfd = sys3(SYS_open, (long)"/sys/bus/pci/drivers/uio_pci_generic/new_id", 1 /*O_WRONLY*/, 0);
     if (bfd >= 0) {
@@ -654,9 +731,10 @@ void milin_main(void) {
         P("M5.1 OK: helqueue async rings + futex + creds + bench\n");
         P("M7 OK: capability lanes + supervisor auto-restart\n");
         P("M7.1 OK: revoke capability on client death\n");
+        P("M7.2 OK: bus-death cascade restart\n");
         sys3(SYS_exit, 0, 0, 0);
     }
-    P("M7.1 FAILED\n");
+    P("M7.2 FAILED\n");
     sys3(SYS_exit, 1, 0, 0);
     __builtin_unreachable();
 }

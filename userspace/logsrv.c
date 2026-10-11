@@ -202,6 +202,32 @@ static void serve_queue_lane(struct mlq_pair *p, u32 uid, u32 pid, u32 rights) {
     }
 }
 
+// коннект к шине с ожиданием старта + REGISTER "log" с политикой прав;
+// возвращаемый fd шины или -1. Используется и на старте, и после смерти
+// шины (M7.2: каскад — каждый зависимый сервис сам встаёт в строй)
+static long bus_register(void) {
+    long bus = -1;
+    for (int tries = 0; ; tries++) {
+        bus = ml_connect("milin-bus");
+        if (bus >= 0) break;
+        if (tries > 200) return -1;
+        sleep_ms(10);
+    }
+    struct ml_msg m = { ML_PROTO_BUS, BUS_REGISTER, 0, 0, {0} };
+    m_memcpy(m.head, "log", 4);
+    u32 masks[2] = { LOG_WORLD, LOG_ROOT };
+    if (ml_send(bus, &m, masks, sizeof(masks), 0, 0) < 0) {
+        sys3(SYS_close, bus, 0, 0);
+        return -1;
+    }
+    struct ml_msg resp;
+    if (ml_recv(bus, &resp, 0, 0, 0) <= 0 || resp.err != ML_E_OK) {
+        sys3(SYS_close, bus, 0, 0);
+        return -1;
+    }
+    return bus;
+}
+
 void milin_main(void) {
     // M7: наименьшие привилегии — log-сервер не делает ничего, для чего
     // нужен root. Заодно клиент (тоже uid 1000) может его убить в демо
@@ -214,31 +240,9 @@ void milin_main(void) {
     print_dec_n(sys3(SYS_getuid, 0, 0, 0));
     P(")\n");
 
-    // шина стартует раньше, но форк не гарантирует порядок —
-    // честно подожду (так же делает и клиент, и FUSE-клиент в M4)
-    long bus = -1;
-    for (int tries = 0; ; tries++) {
-        bus = ml_connect("milin-bus");
-        if (bus >= 0) break;
-        if (tries > 200) {
-            P("log-srv: шина не отвечает\n");
-            sys3(SYS_exit, 1, 0, 0);
-        }
-        sleep_ms(10);
-    }
-
-    struct ml_msg m = { ML_PROTO_BUS, BUS_REGISTER, 0, 0, {0} };
-    m_memcpy(m.head, "log", 4);
-    // M7: политика прав в tail REGISTER — шина будет выдавать lane'ы
-    // только по ней (uid клиента подтверждён ядром)
-    u32 masks[2] = { LOG_WORLD, LOG_ROOT };
-    if (ml_send(bus, &m, masks, sizeof(masks), 0, 0) < 0) {
-        P("log-srv: register: FAIL\n");
-        sys3(SYS_exit, 1, 0, 0);
-    }
-    struct ml_msg resp;
-    if (ml_recv(bus, &resp, 0, 0, 0) <= 0 || resp.err != ML_E_OK) {
-        P("log-srv: register отклонён\n");
+    long bus = bus_register();
+    if (bus < 0) {
+        P("log-srv: шина не отвечает\n");
         sys3(SYS_exit, 1, 0, 0);
     }
     P("log-srv: зарегистрирован в шине как \"log\"\n");
@@ -248,7 +252,22 @@ void milin_main(void) {
         char req_tail[8];
         struct ml_aux aux;
         // жду, пока шина приведёт клиента (LaneRequest + lane-хэндл + права)
-        if (ml_recv(bus, &m2, req_tail, sizeof(req_tail), &aux) <= 0) break;
+        if (ml_recv(bus, &m2, req_tail, sizeof(req_tail), &aux) <= 0) {
+            // M7.2: шина умерла — регистрация умерла вместе с ней, а мой
+            // state (счётчик, права) — мой. Каскад: переподключаюсь и
+            // встаю в строй сам, супервизору перезапускать меня не нужно
+            P("log-srv: шина умерла — перерегистрация (счётчик пережил: ");
+            print_dec_n(served % 1000000);
+            P(")\n");
+            sys3(SYS_close, bus, 0, 0);
+            bus = bus_register();
+            if (bus < 0) {
+                P("log-srv: шина не вернулась\n");
+                sys3(SYS_exit, 1, 0, 0);
+            }
+            P("log-srv: перерегистрирован в новой шине\n");
+            continue;
+        }
         if (m2.proto == ML_PROTO_BUS && m2.msg_id == BUS_REVOKE) {
             // M7.1: шина — владелец прав, она подтверждает смерть клиента;
             // свою часть (сторож очереди) сервер уже сделал или сделает
