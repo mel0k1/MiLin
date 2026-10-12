@@ -4,6 +4,7 @@
 // Микроядро честно: ни одного socket-сисколла ядру про TCP — только IPC.
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -205,6 +206,10 @@ static void *reader(void *arg) {
                     k->rxlen += tlen;
                     u64 one = 1;
                     real_write(k->efd, &one, 8);
+                    // M14-fix: читатель мог зайти в cond_wait ДО прихода
+                    // данных (реальная сеть = RTT >> локального) — без
+                    // broadcast он спал бы до EOF
+                    pthread_cond_broadcast(&k->c);
                 }
             } else if (m.msg_id == NET_EOF) {
                 k->state = (m.err == ML_E_OK) ? 3 : 4;
@@ -406,6 +411,19 @@ ssize_t recv(int fd, void *buf, size_t n, int flags) {
     return sock_read(k, buf, n);
 }
 
+// openssl 3.x может идти через recvmsg/readv — хэндлим честно
+ssize_t recvmsg(int fd, struct msghdr *mh, int flags) {
+    init_once();
+    struct nsock *k = sock_by_fd(fd);
+    if (!k) {
+        static ssize_t (*real_recvmsg)(int, struct msghdr *, int);
+        if (!real_recvmsg) real_recvmsg = dlsym(RTLD_NEXT, "recvmsg");
+        return real_recvmsg(fd, mh, flags);
+    }
+    if (mh->msg_iovlen != 1) { errno = EINVAL; return -1; }
+    return recv(fd, mh->msg_iov[0].iov_base, mh->msg_iov[0].iov_len, flags);
+}
+
 ssize_t write(int fd, const void *buf, size_t n) {
     init_once();
     struct nsock *k = sock_by_fd(fd);
@@ -525,12 +543,232 @@ int fcntl(int fd, int cmd, ...) {
 }
 static int (*real_getaddrinfo)(const char *, const char *,
                                const struct addrinfo *, struct addrinfo **);
+static int getaddrinfo_m14(const char *host, const char *serv,
+                           const struct addrinfo *hints, struct addrinfo **res);
 int getaddrinfo(const char *host, const char *serv,
                 const struct addrinfo *hints, struct addrinfo **res) {
     init_once();
-    if (!real_getaddrinfo)
-        real_getaddrinfo = dlsym(RTLD_NEXT, "getaddrinfo");
-    return real_getaddrinfo(host, serv, hints, res);
+    // glibc-резолвер требует UDP (netd его не умеет) — резолвим сами
+    // по TCP:53 через netd; AF_INET6-запросы честно не поддержаны
+    if (hints && hints->ai_family == AF_INET6) return EAI_NONAME;
+    // AI_NUMERICHOST:caller требует только литерал (libfetch так проверяет,
+    // имя ли host — резолвить нельзя, иначе ломается SAN-проверка TLS)
+    if (hints && (hints->ai_flags & AI_NUMERICHOST)) {
+        struct in_addr lit;
+        if (!host || inet_pton(AF_INET, host, &lit) != 1) return EAI_NONAME;
+        return getaddrinfo_m14(host, serv, hints, res);
+    }
+    return getaddrinfo_m14(host, serv, hints, res);
+}
+
+// --- DNS (M14): /etc/resolv.conf -> TCP:53 через netd. UDP-стека в netd
+// нет, а DNS-over-TCP обязателен для резолверов (RFC 7766): query = 2-байтовая
+// длина + сообщение, ответ так же. A-записи достаточно (двойные запросы
+// A/AAAA libfetch сам переваривает).
+
+static unsigned short dns_port(const char *serv) {
+    if (!serv) return 80;
+    if (serv[0] >= '0' && serv[0] <= '9') return (unsigned short)atoi(serv);
+    if (!strcmp(serv, "https")) return 443;
+    if (!strcmp(serv, "http")) return 80;
+    if (!strcmp(serv, "ftp")) return 21;
+    return 80;
+}
+
+// resolv.conf: до 2 nameserver'ов (путь переопределяется для тестов)
+static int dns_nameservers(unsigned int *out, int max) {
+    const char *path = getenv("MILIN_RESOLV_CONF");
+    if (!path) path = "/etc/resolv.conf";
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char line[256];
+    int n = 0;
+    while (n < max && fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "nameserver", 10)) continue;
+        const char *p = line + 10;
+        while (*p == ' ' || *p == '\t') p++;
+        char ip[64];
+        size_t il = 0;
+        while (p[il] && p[il] != '\n' && p[il] != '\r' && p[il] != ' ' &&
+               p[il] != '\t' && il + 1 < sizeof(ip)) {
+            ip[il] = p[il];
+            il++;
+        }
+        ip[il] = 0;
+        struct in_addr a;
+        if (!il || inet_pton(AF_INET, ip, &a) != 1) continue;
+        out[n++] = ntohl(a.s_addr);
+    }
+    fclose(f);
+    return n;
+}
+
+// имена -> QNAME (метки длиной+байты), ответ: пропускаем question
+static int dns_query(unsigned int ns, const char *name,
+                     unsigned int *out_a, int max_a) {
+    char q[512];
+    memset(q, 0, sizeof(q));
+    int ql = 0;
+    // header: id, RD, QDCOUNT=1
+    q[ql++] = 0x12; q[ql++] = 0x34;
+    q[ql++] = 0x01; q[ql++] = 0x00;
+    q[ql++] = 0; q[ql++] = 1; q[ql++] = 0; q[ql++] = 0;
+    q[ql++] = 0; q[ql++] = 0; q[ql++] = 0; q[ql++] = 0;
+    const char *p = name;
+    while (*p) {
+        const char *dot = strchr(p, '.');
+        size_t len = dot ? (size_t)(dot - p) : strlen(p);
+        if (len == 0 || len > 63 || ql + 1 + len > 400) return -1;
+        q[ql++] = (char)len;
+        memcpy(q + ql, p, len);
+        ql += len;
+        if (!dot) break;
+        p = dot + 1;
+    }
+    q[ql++] = 0;
+    q[ql++] = 0; q[ql++] = 1;    // QTYPE=A
+    q[ql++] = 0; q[ql++] = 1;    // QCLASS=IN
+
+    // TCP: 2-байтовая длина префиксом
+    unsigned char pkt[600];
+    pkt[0] = (unsigned char)(ql >> 8);
+    pkt[1] = (unsigned char)(ql & 0xFF);
+    memcpy(pkt + 2, q, ql);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(53);
+    sa.sin_addr.s_addr = htonl(ns);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (send(fd, pkt, ql + 2, 0) != (ssize_t)(ql + 2)) {
+        close(fd);
+        return -1;
+    }
+    // ответ: 2 байта длины, потом сообщение (может прийти кусками)
+    unsigned char hdr[2];
+    size_t got = 0;
+    while (got < 2) {
+        ssize_t r = recv(fd, hdr + got, 2 - got, 0);
+        if (r <= 0) { close(fd); return -1; }
+        got += r;
+    }
+    int plen = (hdr[0] << 8) | hdr[1];
+    if (plen < 12 || plen > 4096) { close(fd); return -1; }
+    unsigned char *resp = malloc(plen);
+    if (!resp) { close(fd); return -1; }
+    got = 0;
+    while (got < (size_t)plen) {
+        ssize_t r = recv(fd, resp + got, plen - got, 0);
+        if (r <= 0) { free(resp); close(fd); return -1; }
+        got += r;
+    }
+    close(fd);
+    int qd = (resp[4] << 8) | resp[5];
+    int an = (resp[6] << 8) | resp[7];
+    if (!an) { free(resp); return -1; }
+    // question-секции: QNAME + 4 байта
+    int off = 12;
+    for (int i = 0; i < qd; i++) {
+        while (off < plen && resp[off]) {
+            if (resp[off] & 0xC0) { off += 2; goto qdone; }
+            off += resp[off] + 1;
+        }
+        off++;
+qdone:
+        off += 4;
+    }
+    int found = 0;
+    for (int i = 0; i < an && found < max_a; i++) {
+        // name: метки или указатель
+        int jump = 0, saved = 0;
+        for (;;) {
+            if (off >= plen) break;
+            int l = resp[off];
+            if ((l & 0xC0) == 0xC0) {
+                if (!jump) saved = off + 2;
+                off = ((l & 0x3F) << 8) | resp[off + 1];
+                jump = 1;
+                continue;
+            }
+            off += l + 1;
+            if (!l) { if (jump) off = saved; break; }
+        }
+        if (off + 10 > plen) break;
+        int type = (resp[off] << 8) | resp[off + 1];
+        int rdlen = (resp[off + 8] << 8) | resp[off + 9];
+        off += 10;
+        if (type == 1 && rdlen == 4 && off + 4 <= plen) {
+            unsigned int ip = ((unsigned int)resp[off] << 24) |
+                              ((unsigned int)resp[off + 1] << 16) |
+                              ((unsigned int)resp[off + 2] << 8) |
+                              resp[off + 3];
+            out_a[found++] = ip;
+        }
+        off += rdlen;
+    }
+    free(resp);
+    return found;
+}
+
+int getaddrinfo_m14(const char *host, const char *serv,
+                    const struct addrinfo *hints, struct addrinfo **res) {
+    *res = 0;
+    if (!host || !*host) return EAI_NONAME;
+
+    // литералы — мимо DNS
+    struct in_addr lit;
+    if (inet_pton(AF_INET, host, &lit) == 1) {
+        struct addrinfo *ai = calloc(1, sizeof(*ai) + sizeof(struct sockaddr_in));
+        if (!ai) return EAI_MEMORY;
+        ai->ai_family = AF_INET;
+        ai->ai_socktype = hints ? hints->ai_socktype : SOCK_STREAM;
+        ai->ai_protocol = IPPROTO_TCP;
+        ai->ai_addrlen = sizeof(struct sockaddr_in);
+        ai->ai_addr = (struct sockaddr *)(ai + 1);
+        struct sockaddr_in *in = (struct sockaddr_in *)ai->ai_addr;
+        in->sin_family = AF_INET;
+        in->sin_port = htons(dns_port(serv));
+        in->sin_addr = lit;
+        *res = ai;
+        return 0;
+    }
+
+    unsigned int ns[2];
+    int nn = dns_nameservers(ns, 2);
+    if (!nn) return EAI_FAIL;
+
+    unsigned int a[8];
+    int found = 0;
+    for (int i = 0; i < nn && !found; i++) {
+        found = dns_query(ns[i], host, a, 8);
+        if (found < 0) found = 0;
+    }
+    if (!found) return EAI_NONAME;
+
+    struct addrinfo *head = 0, *tail = 0;
+    for (int i = 0; i < found; i++) {
+        struct addrinfo *ai = calloc(1, sizeof(*ai) + sizeof(struct sockaddr_in));
+        if (!ai) break;
+        ai->ai_family = AF_INET;
+        ai->ai_socktype = hints ? hints->ai_socktype : SOCK_STREAM;
+        ai->ai_protocol = IPPROTO_TCP;
+        ai->ai_addrlen = sizeof(struct sockaddr_in);
+        ai->ai_addr = (struct sockaddr *)(ai + 1);
+        struct sockaddr_in *in = (struct sockaddr_in *)ai->ai_addr;
+        in->sin_family = AF_INET;
+        in->sin_port = htons(dns_port(serv));
+        in->sin_addr.s_addr = htonl(a[i]);
+        if (tail) tail->ai_next = ai; else head = ai;
+        tail = ai;
+    }
+    *res = head;
+    return head ? 0 : EAI_MEMORY;
 }
 
 int setsockopt(int fd, int level, int opt, const void *v, socklen_t l) {
