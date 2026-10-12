@@ -376,6 +376,36 @@ pristine-дереве. M10 доводит до конца: GPU-стек восс
   ни на что не привязался (vgaarb: loaded), весь демо-цикл M5–M9 прошёл
   на kdrv-ядре. Runtime-смоук GPU — на реальном железе.
 
+### M11 — mlkd-фасад amdgpu: один протокол, два размещения ✅
+
+Смещённый запрос реализован: драйвер домена `drivers/mlin/amdgpu-fac.c`
+(`/dev/amdgpu`) принимает от клиентов протокол **mlgpu** (INFO/ALLOC/FREE/
+SUBMIT/WAIT — зеркала `userspace/mlgpu.h` и форк-заголовок). Режимы — лениво
+на первом INFO: **facade** (diet-сборка, эмуляция), **amdgpu** (kdrv-сборка,
+запросная плоскость перед DRM), **hw** (AMD-железо найдено — форвардинг).
+Placement — та же политика M9: kernel — цикл в kthread'е домена; user —
+демон `gpud` через lane `gpu.amdgpu` (ML_PROTO_GPU), тот же wire-формат,
+уступание дороги домену (ML_E_PERM) при возврате. gpud переживает смерть
+шины каскадным перезапуском. Демо: docs/boot-m11.log, маркер **M11 OK**.
+
+### M12 — userspace-сеть: netd + socket-шима ✅
+
+Сеть без единого сетевого сисколла ядру про TCP: `/sbin/netd` —
+userspace-стек (e1000 поверх UIO: BAR0 в mmap, кольца/буферы в
+pinned-DMA регионе `/dev/mlpinned` — резерва e820, форк M12) + ARP/IPv4/
+ICMP/TCP + сервис `net0` (ML_PROTO_NET) на шине: NET_OPEN/CONNECT/SEND/
+CLOSE, данные сервера — push'и NET_DATA/EOF владельцу сокета.
+
+- `userspace/netsh.so` — LD_PRELOAD-шима для динамических glibc-бинарей:
+  socket/connect/send/recv/read/write/poll/close уезжают lane'ом в netd,
+  дескриптор — eventfd, reader-тред копит rx и дёргает событие;
+- `netclient` — гейт: HTTP GET 10.0.2.2:8000 (slirp → host http.server)
+  через полный путь IPC → netd → e1000 → slirp (маркер **M12 OK**);
+- отладка по пути: sockaddr в host-order на проводе, sid из NET_OPEN_R,
+  доверие IP total length (slirp паддит короткие кадры), идемпотентный
+  connect (ретраи happy-eyeballs libfetch);
+- цена: EVENTFD в ядре; boot-тест добавил e1000 + memmap-резерв + http-root.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -393,6 +423,8 @@ pristine-дереве. M10 доводит до конца: GPU-стек восс
 | M8 | Раздельные пути IPC + glibc userspace | ✅ сделано |
 | M9 | kdriver-домен | ✅ сделано |
 | M10 | amdgpu в обрезанном дереве | ✅ сделано |
+| M11 | mlkd-фасад amdgpu | ✅ сделано |
+| M12 | userspace-сеть (netd + netsh) | ✅ сделано |
 
 ## Честные оговорки
 
