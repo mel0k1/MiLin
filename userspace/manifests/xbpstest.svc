@@ -1,0 +1,5 @@
+# M13: e2e пакетного менеджера — xbps-install из репо через netd, запуск
+name=xbpstest
+exec=/sbin/xbpstest
+type=oneshot
+order=96
