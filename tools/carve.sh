@@ -134,15 +134,17 @@ PYEOF
 }
 
 # --- шаг 3: подсистемы, выключенные ещё в M2 --------------------------------
-# sound, net, block, crypto, virt(+kvm), ipc — всё это за пределами
-# «судьбоносного треугольника» (sched/mm/IPC-ABI), вернётся как userspace.
+# M2/M3: sound/net/block/crypto/virt/ipc резались целиком. К M14 политика
+# изменилась: net вернулся авторским минимумом (M5, AF_UNIX; файлы
+# net/Kconfig и net/Makefile — авторские, живут в форке), block+crypto
+# вернулись целиком как контракт бут-хранения (M14: AHCI/NVMe/virtio-blk,
+# ext4/jbd2/crc32c). Под нож идут только sound, virt(+kvm).
 # security/ не удаляем, а ужимаем до двух безусловно-линкуемых файлов:
 # commoncap.o (cap_capable/cap_ptrace_* — kernel/capability.c и ptrace)
 # и min_addr.o (mmap_min_addr) — это клей, а не подсистема.
 step_subsys() {
-    say "subsys: sound, net, block, crypto, virt, x86/kvm; security -> 2 файла"
-    rm -rf "$TREE/sound" "$TREE/net" "$TREE/block" "$TREE/crypto" \
-           "$TREE/virt" "$TREE/arch/x86/kvm"
+    say "subsys: sound, virt, x86/kvm; security -> 2 файла"
+    rm -rf "$TREE/sound" "$TREE/virt" "$TREE/arch/x86/kvm"
     for f in "$TREE"/security/*; do
         b="$(basename "$f")"
         case " commoncap.c min_addr.c Makefile Kconfig " in
@@ -165,7 +167,7 @@ EOF
 # линкуется с i8253 PIT (clockevent_i8253_*) и CMOS RTC (mc146818_*).
 # M4: pci — шина для userspace-драйверов (uio_pci_generic); video —
 # screen_info_pci.o, на который ссылается vgaarb из drivers/pci.
-DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video"
+DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video net block ata scsi nvme input"
 step_drivers() {
     say "drivers: оставляю только: $DRIVERS_KEEP"
     for d in "$TREE"/drivers/*/; do
@@ -182,7 +184,7 @@ step_drivers() {
 # --- шаг 5: fs — ядро ВФС + ramfs (rootfs) + fuse + контракт серверов -------
 # M4: iomap (select у FUSE_FS), sysfs+kernfs (discovery-интерфейс серверов:
 # привязка device-id к uio_pci_generic идёт через /sys/bus/.../new_id)
-FS_KEEP="ramfs fuse iomap sysfs kernfs"
+FS_KEEP="ramfs fuse iomap sysfs kernfs ext4 jbd2 proc"
 step_fs() {
     say "fs: из подкаталогов оставляю только: $FS_KEEP"
     for d in "$TREE"/fs/*/; do

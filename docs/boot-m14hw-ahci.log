@@ -1,0 +1,356 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+1EFC6A20+1EF06A20 CA00
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JLinux version 7.2.0+ (z@c-6accf5a2-14810412-5f848dbdb82e) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #7 PREEMPT Mon Oct 12 18:16:17 UTC 2026
+Command line: console=ttyS0 panic=-1 memmap=4M$0x8000000
+BIOS-provided physical RAM map:
+BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff]  System RAM
+BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff]  device reserved
+BIOS-e820: [gap 0x00000000000a0000-0x00000000000effff]
+BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff]  device reserved
+BIOS-e820: [mem 0x0000000000100000-0x000000001ffdefff]  System RAM
+BIOS-e820: [mem 0x000000001ffdf000-0x000000001fffffff]  device reserved
+BIOS-e820: [gap 0x0000000020000000-0x00000000afffffff]
+BIOS-e820: [mem 0x00000000b0000000-0x00000000bfffffff]  device reserved
+BIOS-e820: [gap 0x00000000c0000000-0x00000000fed1bfff]
+BIOS-e820: [mem 0x00000000fed1c000-0x00000000fed1ffff]  device reserved
+BIOS-e820: [gap 0x00000000fed20000-0x00000000fffbffff]
+BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff]  device reserved
+BIOS-e820: [gap 0x0000000100000000-0x000000fcffffffff]
+BIOS-e820: [mem 0x000000fd00000000-0x000000ffffffffff]  device reserved
+NX (Execute Disable) protection: active
+APIC: Static calls initialized
+user-defined physical RAM map:
+user: [mem 0x0000000000000000-0x000000000009fbff]  System RAM
+user: [mem 0x000000000009fc00-0x000000000009ffff]  device reserved
+user: [gap 0x00000000000a0000-0x00000000000effff]
+user: [mem 0x00000000000f0000-0x00000000000fffff]  device reserved
+user: [mem 0x0000000000100000-0x0000000007ffffff]  System RAM
+user: [mem 0x0000000008000000-0x00000000083fffff]  device reserved
+user: [mem 0x0000000008400000-0x000000001ffdefff]  System RAM
+user: [mem 0x000000001ffdf000-0x000000001fffffff]  device reserved
+user: [gap 0x0000000020000000-0x00000000afffffff]
+user: [mem 0x00000000b0000000-0x00000000bfffffff]  device reserved
+user: [gap 0x00000000c0000000-0x00000000fed1bfff]
+user: [mem 0x00000000fed1c000-0x00000000fed1ffff]  device reserved
+user: [gap 0x00000000fed20000-0x00000000fffbffff]
+user: [mem 0x00000000fffc0000-0x00000000ffffffff]  device reserved
+user: [gap 0x0000000100000000-0x000000fcffffffff]
+user: [mem 0x000000fd00000000-0x000000ffffffffff]  device reserved
+tsc: Fast TSC calibration using PIT
+tsc: Detected 3199.991 MHz processor
+last_pfn = 0x1ffdf max_arch_pfn = 0x400000000
+x86/PAT: PAT support disabled because CONFIG_X86_PAT is disabled in the kernel.
+x86/PAT: Configuration [0-7]: WB  WT  UC- UC  WB  WT  UC- UC  
+found SMP MP-table at [mem 0x000f5470-0x000f547f]
+RAMDISK: [mem 0x1ef22000-0x1ffcffff]
+Intel MultiProcessor Specification v1.4
+MPTABLE: OEM ID: BOCHSCPU
+MPTABLE: Product ID: 0.1         
+MPTABLE: APIC at: 0xFEE00000
+Intel MultiProcessor Specification v1.4
+MPTABLE: OEM ID: BOCHSCPU
+MPTABLE: Product ID: 0.1         
+MPTABLE: APIC at: 0xFEE00000
+Processor #0 (Bootup-CPU)
+IOAPIC[0]: apic_id 0, version 32, address 0xfec00000, GSI 0-23
+Processors: 1
+CPU topo: Max. logical packages:   1
+CPU topo: Max. logical nodes:      1
+CPU topo: Num. nodes per package:  1
+CPU topo: Max. logical dies:       1
+CPU topo: Max. dies per package:   1
+CPU topo: Max. threads per core:   1
+CPU topo: Num. cores per package:     1
+CPU topo: Num. threads per package:   1
+CPU topo: Allowing 1 present CPUs plus 0 hotplug CPUs
+[gap 0x20000000-0xafffffff] available for PCI devices
+clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645519600211568 ns
+Zone ranges:
+  DMA32    [mem 0x0000000000001000-0x000000001ffdefff]
+  Normal   empty
+Movable zone start for each node
+Early memory node ranges
+  node   0: [mem 0x0000000000001000-0x000000000009efff]
+  node   0: [mem 0x0000000000100000-0x0000000007ffffff]
+  node   0: [mem 0x0000000008400000-0x000000001ffdefff]
+Initmem setup node 0 [mem 0x0000000000001000-0x000000001ffdefff]
+On node 0, zone DMA32: 1 pages in unavailable ranges
+On node 0, zone DMA32: 97 pages in unavailable ranges
+On node 0, zone DMA32: 1024 pages in unavailable ranges
+On node 0, zone DMA32: 33 pages in unavailable ranges
+Kernel command line: console=ttyS0 panic=-1 memmap=4M$0x8000000
+printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
+Dentry cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
+Inode-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+Built 1 zonelists, mobility grouping on.  Total pages: 129917
+mem auto-init: stack:off, heap alloc:off, heap free:off
+SLUB: HWalign=64, Order=0-1, MinObjects=0, CPUs=1, Nodes=1
+RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+NR_IRQS: 4352, nr_irqs: 48, preallocated irqs: 16
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+Console: colour VGA+ 80x25
+printk: legacy console [ttyS0] enabled
+APIC: Switch to symmetric I/O mode setup
+..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e2041630d7, max_idle_ns: 440795278720 ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.98 BogoMIPS (lpj=12799964)
+Last level iTLB entries: 4KB 512, 2MB 255, 4MB 127
+Last level dTLB entries: 4KB 512, 2MB 255, 4MB 127, 1GB 0
+CPU: AMD QEMU Virtual CPU version 2.5+ (family: 0xf, model: 0x6b, stepping: 0x1)
+mitigations: Enabled attack vectors: SMT mitigations: off
+Spectre V2 : Vulnerable
+Spectre V1 : Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers
+x86/fpu: x87 FPU will use FXSAVE
+pid_max: default: 32768 minimum: 301
+Mount-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+Mountpoint-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+VFS: Finished mounting rootfs on nullfs
+Performance Events: PMU not available due to virtualization, using software events only.
+signal: max sigframe size: 1040
+Memory: 482188K/519668K available (5387K kernel code, 909K rwdata, 776K rodata, 616K init, 240K bss, 36744K reserved, 0K cma-reserved)
+devtmpfs: initialized
+futex hash table entries: 256 (6144 bytes on 1 NUMA nodes, total 6 KiB, linear).
+NET: Registered PF_NETLINK/PF_ROUTE protocol family
+PCI: Using configuration type 1 for base access
+SCSI subsystem initialized
+mlkd: домен драйверов готов (major 254)
+mlpinned: pinned-DMA регион готов (major 253, phys 8000000)
+PCI: Probing PCI hardware
+PCI host bridge to bus 0000:00
+pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+pci_bus 0000:00: root bus resource [mem 0x00000000-0xffffffffff]
+pci_bus 0000:00: No busn resource found for root bus, will use [bus 00-ff]
+pci 0000:00:00.0: [8086:29c0] type 00 class 0x060000 conventional PCI endpoint
+pci 0000:00:01.0: [1234:1111] type 00 class 0x030000 conventional PCI endpoint
+pci 0000:00:01.0: BAR 0 [mem 0xfd000000-0xfdffffff pref]
+pci 0000:00:01.0: BAR 2 [mem 0xfebd4000-0xfebd4fff]
+pci 0000:00:01.0: ROM [mem 0xfebc0000-0xfebcffff pref]
+pci 0000:00:01.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+pci 0000:00:02.0: [8086:10d3] type 00 class 0x020000 PCIe Root Complex Integrated Endpoint
+pci 0000:00:02.0: BAR 0 [mem 0xfeb80000-0xfeb9ffff]
+pci 0000:00:02.0: BAR 1 [mem 0xfeba0000-0xfebbffff]
+pci 0000:00:02.0: BAR 2 [io  0xc040-0xc05f]
+pci 0000:00:02.0: BAR 3 [mem 0xfebd0000-0xfebd3fff]
+pci 0000:00:02.0: ROM [mem 0xfeb40000-0xfeb7ffff pref]
+pci 0000:00:02.0: enabling Extended Tags
+pci 0000:00:03.0: [1af4:1005] type 00 class 0x00ff00 conventional PCI endpoint
+pci 0000:00:03.0: BAR 0 [io  0xc060-0xc07f]
+pci 0000:00:03.0: BAR 1 [mem 0xfebd5000-0xfebd5fff]
+pci 0000:00:03.0: BAR 4 [mem 0xfe000000-0xfe003fff 64bit pref]
+pci 0000:00:04.0: [8086:2922] type 00 class 0x010601 conventional PCI endpoint
+pci 0000:00:04.0: BAR 4 [io  0xc080-0xc09f]
+pci 0000:00:04.0: BAR 5 [mem 0xfebd6000-0xfebd6fff]
+pci 0000:00:1f.0: [8086:2918] type 00 class 0x060100 conventional PCI endpoint
+pci 0000:00:1f.0: quirk: [io  0x0600-0x067f] claimed by ICH6 ACPI/GPIO/TCO
+pci 0000:00:1f.2: [8086:2922] type 00 class 0x010601 conventional PCI endpoint
+pci 0000:00:1f.2: BAR 4 [io  0xc0a0-0xc0bf]
+pci 0000:00:1f.2: BAR 5 [mem 0xfebd7000-0xfebd7fff]
+pci 0000:00:1f.3: [8086:2930] type 00 class 0x0c0500 conventional PCI endpoint
+pci 0000:00:1f.3: BAR 4 [io  0x0700-0x073f]
+pci_bus 0000:00: busn_res: [bus 00-ff] end is updated to 00
+pci 0000:00:01.0: PIIX/ICH IRQ router [1234:1111]
+e820: register RAM buffer resource [mem 0x0009fc00-0x0009ffff]
+e820: register RAM buffer resource [mem 0x1ffdf000-0x1fffffff]
+pci 0000:00:01.0: vgaarb: setting as boot VGA device
+pci 0000:00:01.0: vgaarb: bridge control possible
+pci 0000:00:01.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+vgaarb: loaded
+clocksource: Switched to clocksource tsc-early
+NET: Registered PF_UNIX/PF_LOCAL protocol family
+pci_bus 0000:00: resource 4 [io  0x0000-0xffff]
+pci_bus 0000:00: resource 5 [mem 0x00000000-0xffffffffff]
+PCI: CLS 0 bytes, default 64
+Unpacking initramfs...
+platform rtc_cmos: registered fallback platform RTC device
+workingset: timestamp_bits=62 (anon: 57) max_order=17 bucket_order=0 (anon: 0)
+fuse: init (API version 7.45)
+Block layer SCSI generic (bsg) driver version 0.4 loaded (major 252)
+io scheduler mq-deadline registered
+io scheduler kyber registered
+ahci 0000:00:04.0: PCI->APIC IRQ transform: INT A -> IRQ 10
+ahci 0000:00:04.0: AHCI vers 0001.0000, 32 command slots, 1.5 Gbps, SATA mode
+ahci 0000:00:04.0: 6/6 ports implemented (port mask 0x3f)
+ahci 0000:00:04.0: flags: 64bit ncq only 
+scsi host0: ahci
+scsi host1: ahci
+scsi host2: ahci
+scsi host3: ahci
+scsi host4: ahci
+scsi host5: ahci
+ata1: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6100 irq 10 lpm-pol 1
+ata2: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6180 irq 10 lpm-pol 1
+ata3: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6200 irq 10 lpm-pol 1
+ata4: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6280 irq 10 lpm-pol 1
+ata5: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6300 irq 10 lpm-pol 1
+ata6: SATA max UDMA/133 abar m4096@0xfebd6000 port 0xfebd6380 irq 10 lpm-pol 1
+ahci 0000:00:1f.2: PCI->APIC IRQ transform: INT A -> IRQ 10
+ahci 0000:00:1f.2: AHCI vers 0001.0000, 32 command slots, 1.5 Gbps, SATA mode
+ahci 0000:00:1f.2: 6/6 ports implemented (port mask 0x3f)
+ahci 0000:00:1f.2: flags: 64bit ncq only 
+scsi host6: ahci
+scsi host7: ahci
+scsi host8: ahci
+scsi host9: ahci
+scsi host10: ahci
+scsi host11: ahci
+ata7: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7100 irq 10 lpm-pol 1
+ata8: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7180 irq 10 lpm-pol 1
+ata9: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7200 irq 10 lpm-pol 1
+ata10: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7280 irq 10 lpm-pol 1
+ata11: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7300 irq 10 lpm-pol 1
+ata12: SATA max UDMA/133 abar m4096@0xfebd7000 port 0xfebd7380 irq 10 lpm-pol 1
+serio: i8042 KBD port at 0x60,0x64 irq 1
+serio: i8042 AUX port at 0x60,0x64 irq 12
+virtio-pci 0000:00:03.0: PCI->APIC IRQ transform: INT A -> IRQ 11
+input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
+Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+serial8250: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+random: crng init done
+mlkd: kdemo зарегистрирован (254:0, placement=kernel)
+mlkd: kdemo стартовал в домене ядра (kthread pid 61)
+mlkd: amdgpu зарегистрирован (254:1, placement=kernel)
+mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 62), режим уточняется на первом INFO
+sched_clock: Marking stable (698253944, 15635806)->(718093433, -4203683)
+ata3: SATA link down (SStatus 0 SControl 300)
+ata2: SATA link down (SStatus 0 SControl 300)
+ata4: SATA link down (SStatus 0 SControl 300)
+ata6: SATA link down (SStatus 0 SControl 300)
+ata5: SATA link down (SStatus 0 SControl 300)
+ata1: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
+ata1.00: Model 'QEMU HARDDISK', rev '2.5+', applying quirks: bridgeok
+ata1.00: ATA-7: QEMU HARDDISK, 2.5+, max UDMA/100
+ata1.00: 131072 sectors, multi 16: LBA48 NCQ (depth 32)
+ata1.00: configured for UDMA/100
+scsi 0:0:0:0: Direct-Access     ATA      QEMU HARDDISK    2.5+ PQ: 0 ANSI: 5
+sd 0:0:0:0: [sda] 131072 512-byte logical blocks: (67.1 MB/64.0 MiB)
+sd 0:0:0:0: [sda] Write Protect is off
+sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+ata7: SATA link down (SStatus 0 SControl 300)
+sd 0:0:0:0: [sda] Preferred minimum I/O size 512 bytes
+ata8: SATA link down (SStatus 0 SControl 300)
+ata9: SATA link down (SStatus 0 SControl 300)
+ata11: SATA link down (SStatus 0 SControl 300)
+ata10: SATA link down (SStatus 0 SControl 300)
+ata12: SATA link down (SStatus 0 SControl 300)
+sd 0:0:0:0: [sda] Attached SCSI disk
+input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input2
+clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2e2041630d7, max_idle_ns: 440795278720 ns
+clocksource: Switched to clocksource tsc
+Freeing initrd memory: 17080K
+Freeing unused kernel image (initmem) memory: 616K
+Write protecting the kernel read-only data: 8192k
+Freeing unused kernel image (text/rodata gap) memory: 756K
+Freeing unused kernel image (rodata/data gap) memory: 1272K
+Run /init as init process
+MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)
+supervisor: devtmpfs смонтирован на /dev
+supervisor: sysfs смонтирован
+supervisor: PCI-устройства из pci.ids отданы uio_pci_generic
+supervisor: манифестов: 10
+supervisor: старт mlbus (/sbin/mlbus): service
+log-srv: привилегии сброшены (uid supervisor: старт logsrv (/sbin/logsrv): service
+uiod: /dev/uio0: FAIL (uio_pci_generic не привязался)
+mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
+supervisor: старт uiod (/sbin/uiod): service
+supervisor: старт fused (/sbin/fused): service
+1000)
+netd: /dev/uioN не найден
+netd: NIC не найден — паркуюсь
+supervisor: старт netd (/sbin/netd): service
+supervisor: старт gpud (/sbin/gpud): service
+supervisor: старт client (/sbin/client): oneshot
+client: uid=supervisor: старт netclient (/sbin/netclient): oneshot
+log-srv: зарегистрирован в шине как "log"
+mlbus: register "log" (uid 1000, pid 65, world=0x00000007 root=0x0000000f)
+mlbus: register "gpu.amdgpu" (uid 1000, pid 69, world=0x00000000 root=0x00000001)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+gpud: зарегистрирован в шине как "gpu.amdgpu" (user-placement)
+1000 (был 0 → MULTIUSER работает)
+supervisor: старт xbpstest (/sbin/xbpstest): oneshot
+fused: /mnt смонтирован (fuse): README + note.txt, жду запросы ядра
+log-srv: lane: клиент uid 1000, права 0x00000007
+supervisor: старт mnttest (/sbin/mnttest): oneshot
+mlbus: lookup log: uid 1000, права 0x00000007
+kdriver: /dev/kdemo открыт, echo через домен ядра: OK
+kdriver: счётчик домена 1 -> 2 (state живёт в kthread'е): OK
+client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
+kdriver: kdemo: домен ядра, kthread pid=61, requests=3
+log-srv: uid=1000: привет из MiLin: IPC в стиле bragi/mbus
+mlkd kdemo: mlkd: kdemo: размещение -> user
+kdriver: placement=user: домен отклоняет запросы (-ENODEV): OK
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+log-srv: uid=1000: серверы общаются сообщениями, а не ...(+25 байт)
+mlkd kdemo: mlkd: kdemo: размещение -> kernel
+client: M5-регрессия (seqpacket WRITE x2 + ack): OK
+log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
+log-srv: lane: клиент uid 1000, права 0x00000007
+mlkd: kdemo стартовал в домене ядра (kthread pid 74)
+client: helq: lookup "log" -> lane + shm-регион очередей
+kdriver: placement=kernel: драйвер вернулся в домен: OK
+m11: info (dev/de): amdgpu api=1 mode=0 fences=0
+m11: dev/de: fence=1
+log-srv: uid=1000: асинхронные очереди в разделяемой ...(+23 байт)
+m11: dev/de: submit -> fence 1 -> signaled: OK
+m11: placement=kernel: цикл GPU в kthread'е домена: OK
+mlbus: lookup log: uid 1000, права 0x00000007 + helq-регион
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+log-srv: uid=1000: будильник — futex, ядро в data path не уча�...(+11 байт)
+mlkd amdgpu: mlkd: amdgpu: размещение -> user
+m11: placement=user: домен отклоняет /dev-запросы (-ENODEV): OK
+mlbus: lookup gpu.amdgpu: uid 0, права 0x00000001
+client: helq: WRITE x2 напечатаны с uid, STATS served=4
+
+log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+20416 байт)
+client: helq: WRITE 20480 байт уехал через blob-слот (в очереди — только ссылка)
+m11: info (lanem1): amdgpu api=1 mode=0 fences=0
+m11: lanem1: fence=1
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+m11: lanem1: submit -> fence 1 -> signaled: OK
+m11: placement=user: цикл GPU у gpud через шину: OK
+mlkd amdgpu: mlkd: amdgpu: размещение -> kernel
+mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 76), режим уточняется на первом INFO
+m11: info (dev/de): amdgpu api=1 mode=0 fences=1
+gpud: запрос отклонён: фасад в домене ядра (placement=kernel)
+m11: placement=kernel: gpud уступил дорогу (ML_E_PERM): OK
+m11: mlkd-фасад amdgpu: один протокол, два размещения: OK
+supervisor: uiod (pid 66) умер (код 1) — перезапуск #1
+gpud: lane: клиент ушёл (EOF), capability отозвана
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+supervisor: uiod перезапущен (pid 80)
+uiod: /dev/uio0: FAIL (uio_pci_generic не привязался)
+supervisor: uiod (pid 80) умер (код 1) — перезапуск #2
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+ipc-bench: helq-blob 32K rtt avg=5617675 cycles/msg (blob-слот, n=64)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+ipc-bench: helq-blob 32K pipe avg=3049752 cycles/msg (конвейер, 4 в полёте, n=32)
+log-srv: uid=1000: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl...(+102336 байт)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+client: helq: WRITE 102400 байт уехал цепочкой из 4 blob-слотов (в очереди — одна ссылка)
+EXT4-fs (sda): mounted filesystem 0ef56e23-6009-4c8e-b624-054748215249 r/w with ordered data mode. Quota mode: disabled.
+mnttest: /dev/sda смонтирован (ext4)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+supervisor: uiod перезапущен (pid 81)
+uiod: /dev/uio0: FAIL (uio_pci_generic не привязался)
+supervisor: uiod (pid 81) умер (код 1) — перезапуск #3
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+ipc-bench: helq-bulk 64K rtt avg=7061992 cycles/msg (цепочка blob-слотов, n=32)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+EXT4-fs (sda): unmounting filesystem 0ef56e23-6009-4c8e-b624-054748215249.
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+[*] Updating repository `https://repo-default.voidlinux.org/current/x86_64-repodata' ...
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+mnttest: запись+чтение сошлись, umount OK — /dev/sda (M14HW OK)
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+ipc-bench: helq-futex rtt avg=1020264 cycles (парковка futex'ом, n=256)
+supervisor: uiod перезапущен (pid 82)
+uiod: /dev/uio0: FAIL (uio_pci_generic не привязался)
+supervisor: uiod: лимит перезапусков исчерпан — система нездорова
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100
+Kernel Offset: disabled
