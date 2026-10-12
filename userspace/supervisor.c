@@ -519,6 +519,201 @@ static int gpu_demo(void) {
     return 0;
 }
 
+// --- M15: switch_root на постоянный ext4 (cmdline root=) ---
+// /init есть только в initramfs — его отсутствие = мы уже на реальном
+// корне (guard от повторного переезда у нового /sbin/init).
+// Путь: root= из /proc/cmdline -> mount ext4 -> пустой? сеем копию мира
+// (installer-примитив) -> move /dev /sys /proc -> mount --move / -> chroot
+// -> exec /sbin/init. Диск/корень не годятся — остаёмся в initramfs.
+
+struct mstat {
+    u64 dev, ino, nlink;
+    u32 mode, uid, gid, pad;
+    u64 rdev, size, blk, blocks;
+    u64 atime, mtime, ctime;
+    u64 x[6];   // до 144: ядро пишет полный struct stat, иначе стек рвётся
+};
+
+static int m_stat(const char *p, struct mstat *st) {
+    m_memset(st, 0, sizeof(*st));
+    long r = sys3(SYS_stat, (long)p, (long)st, 0);
+    return r == 0;
+}
+
+// lstat: не следовать симлинкам — copytree сохраняет их как есть
+static int m_lstat(const char *p, struct mstat *st) {
+    m_memset(st, 0, sizeof(*st));
+    long r = sys3(SYS_lstat, (long)p, (long)st, 0);
+    return r == 0;
+}
+
+static void copy_file(const char *src, const char *dst) {
+    long in = sys3(SYS_open, (long)src, O_RDONLY, 0);
+    if (in < 0) { P("seed: open "); print_str(src); P("\n"); return; }
+    struct mstat st;
+    u32 mode = 0644;
+    if (m_stat(src, &st) && (st.mode & 0111)) mode = 0755;
+    long out = sys3(SYS_open, (long)dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out < 0) { P("seed: create "); print_str(dst); P("\n"); sys3(SYS_close, in, 0, 0); return; }
+    static char cb[65536];
+    for (;;) {
+        long n = sys3(SYS_read, in, (long)cb, sizeof(cb));
+        if (n <= 0) break;
+        long w = sys3(SYS_write, out, (long)cb, n);
+        if (w != n) { P("seed: short write "); print_str(dst); P("\n"); break; }
+    }
+    sys3(SYS_close, in, 0, 0);
+    sys3(SYS_close, out, 0, 0);
+}
+
+static void copytree(const char *src, const char *dst, int depth);
+
+static void copy_entry(const char *sdir, const char *ddir,
+                       const char *name, int depth) {
+    char sp[128], dp[128];
+    int a = 0, b = 0;
+    while (sdir[a]) { sp[a] = sdir[a]; a++; }
+    sp[a++] = '/'; sp[a] = 0;
+    while (name[b]) { sp[a + b] = name[b]; b++; }
+    sp[a + b] = 0;
+    a = 0;
+    while (ddir[a]) { dp[a] = ddir[a]; a++; }
+    dp[a++] = '/';
+    b = 0;
+    while (name[b]) { dp[a + b] = name[b]; b++; }
+    dp[a + b] = 0;
+
+    struct mstat st;
+    if (!m_lstat(sp, &st)) return;
+    if ((st.mode & 0xF000) == 0x4000) {                    // S_IFDIR
+        sys3(SYS_mkdir, (long)dp, 0755, 0);
+        copytree(sp, dp, depth + 1);
+    } else if ((st.mode & 0xF000) == 0xA000) {             // S_IFLNK
+        char tgt[128];
+        long n = sys3(SYS_readlink, (long)sp, (long)tgt, sizeof(tgt) - 1);
+        if (n > 0) {
+            tgt[n] = 0;
+            sys3(SYS_symlink, (long)tgt, (long)dp, 0);
+        }
+    } else if ((st.mode & 0xF000) == 0x8000) {             // S_IFREG
+        copy_file(sp, dp);
+    }
+}
+
+static void copytree(const char *src, const char *dst, int depth) {
+    if (depth > 8) return;
+    long fd = sys3(SYS_open, (long)src, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) return;
+    // СТРОГО локальный буфер: рекурсия из copy_entry заменила бы статический
+    char dbuf[16384];
+    for (;;) {
+        long n = sys3(SYS_getdents64, fd, (long)dbuf, sizeof(dbuf));
+        if (n <= 0) break;
+        long off = 0;
+        while (off < n) {
+            struct ldirent64 *e = (struct ldirent64 *)(dbuf + off);
+            const char *nm = e->d_name;
+            if (!(nm[0] == '.' && (!nm[1] || (nm[1] == '.' && !nm[2]))))
+                copy_entry(src, dst, nm, depth);
+            off += e->d_reclen;
+        }
+    }
+    sys3(SYS_close, fd, 0, 0);
+}
+
+// верхний уровень: белые списки — внутри всё, снаружи ничего
+static const char *seed_dirs[] = { "bin", "etc", "lib", "lib64", "root",
+                                   "sbin", "tmp", "usr", "var", 0 };
+
+static void seed_root(void) {
+    P("supervisor: seed постоянного корня (копия мира ~17МБ)...\n");
+    for (int i = 0; seed_dirs[i]; i++)
+        copy_entry("", "/newroot", seed_dirs[i], 0);
+    sys3(SYS_mkdir, (long)"/newroot/mnt", 0755, 0);
+    sys3(SYS_mkdir, (long)"/newroot/proc", 0755, 0);
+    sys3(SYS_mkdir, (long)"/newroot/sys", 0755, 0);
+    sys3(SYS_mkdir, (long)"/newroot/dev", 0755, 0);
+    // /init -> /sbin/init: реальный корень живёт без initramfs-/init
+    copy_file("/init", "/newroot/sbin/init");
+    P("supervisor: SEED OK\n");
+}
+
+static void cmdline_root(char *out, int max) {
+    // /proc/cmdline: "root=/dev/vda1 console=..."
+    sys3(SYS_mkdir, (long)"/proc", 0555, 0);
+    if (sys5(SYS_mount, (long)"proc", (long)"/proc", (long)"proc", 0, 0) != 0)
+        return;
+    long fd = sys3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
+    if (fd < 0) return;
+    char b[512];
+    long n = sys3(SYS_read, fd, (long)b, sizeof(b) - 1);
+    sys3(SYS_close, fd, 0, 0);
+    if (n <= 0) return;
+    b[n] = 0;
+    for (long i = 0; i < n; i++) {
+        if (b[i] != 'r') continue;
+        if (m_strncmp(b + i, "root=", 5) != 0) continue;
+        long j = i + 5;
+        int k = 0;
+        while (j < n && b[j] != ' ' && b[j] != '\n' && k < max - 1)
+            out[k++] = b[j++];
+        out[k] = 0;
+        return;
+    }
+}
+
+static void do_switch_root(void) {
+    sys3(SYS_mkdir, (long)"/newroot/dev", 0755, 0);
+    sys3(SYS_mkdir, (long)"/newroot/sys", 0755, 0);
+    sys3(SYS_mkdir, (long)"/newroot/proc", 0755, 0);
+    sys5(SYS_mount, (long)"/dev", (long)"/newroot/dev", 0, MS_MOVE, 0);
+    sys5(SYS_mount, (long)"/sys", (long)"/newroot/sys", 0, MS_MOVE, 0);
+    sys5(SYS_mount, (long)"/proc", (long)"/newroot/proc", 0, MS_MOVE, 0);
+    sys3(SYS_chdir, (long)"/newroot", 0, 0);
+    sys5(SYS_mount, (long)".", (long)"/", 0, MS_MOVE, 0);
+    sys3(SYS_chroot, (long)".", 0, 0);
+    P("supervisor: switch_root OK — exec /sbin/init\n");
+    char *av[2] = { (char *)"/sbin/init", 0 };
+    sys3(SYS_execve, (long)"/sbin/init", (long)av, 0);
+    P("supervisor: exec /sbin/init FAIL\n");
+    sys3(SYS_exit, 1, 0, 0);
+}
+
+static void try_switch_root(void) {
+    long f = sys3(SYS_open, (long)"/init", O_RDONLY, 0);
+    if (f < 0) return;                       // уже реальный корень
+    sys3(SYS_close, f, 0, 0);
+
+    char rootdev[64];
+    cmdline_root(rootdev, sizeof(rootdev));
+    if (!rootdev[0]) return;
+
+    sys3(SYS_mkdir, (long)"/newroot", 0755, 0);
+    long rc = sys5(SYS_mount, (long)rootdev, (long)"/newroot",
+                   (long)"ext4", 0, 0);
+    if (rc != 0) {
+        P("supervisor: root="); print_str(rootdev);
+        P(" не смонтировался — остаюсь в initramfs\n");
+        return;
+    }
+    P("supervisor: root="); print_str(rootdev); P(" смонтирован (ext4)\n");
+
+    struct mstat st;
+    if (!m_stat("/newroot/sbin/init", &st)) {
+        // пустой/нераспакованный корень: сеем копию мира (installer)
+        seed_root();
+        if (!m_stat("/newroot/sbin/init", &st)) {
+            P("supervisor: seed не удался — остаюсь в initramfs\n");
+            sys5(SYS_umount2, (long)"/newroot", 0, 0, 0, 0);
+            return;
+        }
+    } else {
+        // уже сеянный корень: только монт-пойнты
+        sys3(SYS_mkdir, (long)"/newroot/mnt", 0755, 0);
+    }
+    do_switch_root();
+}
+
 void milin_main(void) {
     P("MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)\n");
 
@@ -580,6 +775,10 @@ void milin_main(void) {
     } else {
         P("supervisor: sysfs недоступен, UIO-привязка невозможна\n");
     }
+
+    // --- M15: root= из cmdline -> постоянный ext4 -> exec /sbin/init ---
+    // (не возвращается при успехе; без root= или с плохим диском — дальше)
+    try_switch_root();
 
     // --- сервисы: из манифестов, в порядке order ---
     load_manifests();

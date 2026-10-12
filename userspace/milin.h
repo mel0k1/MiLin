@@ -48,6 +48,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_open      2
 #define SYS_close     3
 #define SYS_stat      4
+#define SYS_lstat     6
 #define SYS_lseek     8
 #define SYS_mmap      9
 #define SYS_munmap    11
@@ -61,10 +62,16 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_getuid    102
 #define SYS_setuid    105
 #define SYS_mkdir     83
+#define SYS_chdir     80
+#define SYS_symlink   88
+#define SYS_readlink  89
 #define SYS_chown     92
+#define SYS_chroot    161
 #define SYS_mknod     133
 #define SYS_mount     165
 #define SYS_umount2   166
+
+#define MS_MOVE (1 << 13)
 
 #define O_RDONLY   0
 #define O_WRONLY   1

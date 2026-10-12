@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -62,5 +63,15 @@ int main(void) {
         return 1;
 
     printf("M14 OK: real void repo (https) install + run over userspace network\n");
+
+    // M15: маркер персистентности на реальном корне — persistcheck
+    // следующего бута по нему доказывает, что xbps-установка легла на ext4
+    mkdir("/var/milin", 0755);
+    FILE *mk = fopen("/var/milin/installed", "w");
+    if (mk) {
+        fputs("dash\n", mk);
+        fclose(mk);
+        printf("xbpstest: persist marker записан\n");
+    }
     return 0;
 }

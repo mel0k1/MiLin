@@ -32,6 +32,8 @@ gcc -shared -fPIC -O2 -o $R/lib/netsh.so userspace/netsh.c -lpthread -ldl
 # M13: e2e пакетного менеджера
 gcc -O2 -o $R/sbin/xbpstest userspace/xbpstest.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/mnttest userspace/mnttest.c
+# M15: проверка персистентности switch_root
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/persistcheck userspace/persistcheck.c
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh

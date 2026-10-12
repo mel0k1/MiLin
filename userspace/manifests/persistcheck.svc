@@ -1,0 +1,5 @@
+# M15: проверка персистентности switch_root (маркер с прошлого бута)
+name=persistcheck
+exec=/sbin/persistcheck
+type=oneshot
+order=95
