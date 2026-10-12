@@ -6,20 +6,30 @@
 // поверх — ARP/IPv4/ICMP/TCP и сервис "net0" (ML_PROTO_NET) на шине:
 // клиенты открывают сокеты, соединяются, шлют данные — всё lane'ами.
 // QEMU: -device e1000,netdev=n0 -netdev user,id=n0 (10.0.2.15 <- slirp).
+// M15: UDP-слой и DHCP-клиент (RFC 2131) — адресация больше не зашита:
+// DISCOVER/OFFER/REQUEST/ACK, аренда с T1-renew, DNS-опция уезжает в
+// /etc/resolv.conf (resolv.conf читают клиенты: netsh/xbps). Нет сервера
+// в сети — fallback на slirp-статику, DHCP продолжает пробовать в фоне.
 
 #include "milin.h"
 #include "ipc.h"
 
 #define SYS_ioctl        16
 #define O_RDWR           2
+#define O_WRONLY         1
 #define O_RDONLY         0
+#define O_CREAT          0100
+#define O_TRUNC          01000
 
-// --- адресация (slirp по умолчанию) ---
-#define NET_MY_IP   0x0A00020Fu     // 10.0.2.15
-#define NET_GW_IP   0x0A000202u     // 10.0.2.2
-#define NET_MASK    0xFFFFFF00u
+// --- адресация: DHCP-аренда, до неё 0 (fallback — slirp-статика) ---
 #define ETH_HDR     14
 #define ETH_MTU     1500
+static u32 my_ip, my_mask, my_gw;
+static u32 dns1, dns2;
+static u8 addr_set;                        // адрес сконфигурирован (DHCP|fallback)
+#define NET_MY_IP   my_ip                  // старые места читают переменные
+#define NET_MASK    my_mask
+#define NET_GW_IP   my_gw
 
 // --- e1000 MMIO ---
 #define E_CTRL   0x0000
@@ -104,6 +114,10 @@ static void wbe32(u8 *p, u32 v) {
 }
 static void arp_input(const u8 *p, u32 n);
 static void ip_input(const u8 *f, u32 n);
+static void udp_input(const u8 *ip, const u8 *u, u32 n);
+static void dhcp_tick(void);
+static u8 dhcp_st;
+static u32 dhcp_yi;
 
 // RFC 1071: бегущая сумма (без финального дополнения)
 static u32 csum_run(const u8 *b, u32 n, u32 sum) {
@@ -172,6 +186,7 @@ static void nic_poll(void) {
 static u32 ac_ip; static u8 ac_mac[6]; static u8 ac_ok; static u32 ac_t0;
 
 static int arp_get(u32 ip, u8 *out) {
+    if (!addr_set) return -1;
     if (ac_ok && ac_ip == ip) { m_memcpy(out, ac_mac, 6); return 0; }
     if (now_t - ac_t0 >= 4) {
         ac_t0 = now_t;
@@ -196,10 +211,12 @@ static void arp_input(const u8 *p, u32 n) {
     if (n < 28) return;
     u16 oper = rbe16(p + 6);
     u32 spa = rbe32(p + 14);
-    if (spa && (spa & NET_MASK) == (NET_MY_IP & NET_MASK)) {
+    // кэш только при сконфигурированном адресе: до DHCP маска 0, и
+    // первая же ARP-попутка с любым spa попала бы в кэш шлюза
+    if (spa && addr_set && (spa & NET_MASK) == (NET_MY_IP & NET_MASK)) {
         ac_ip = spa; m_memcpy(ac_mac, p + 8, 6); ac_ok = 1;
     }
-    if (oper == 1 && rbe32(p + 24) == NET_MY_IP) {
+    if (oper == 1 && addr_set && rbe32(p + 24) == NET_MY_IP) {
         u8 *f = tx_frame();
         m_memcpy(f, p + 8, 6);
         m_memcpy(f + 6, mac, 6);
@@ -218,10 +235,15 @@ static void arp_input(const u8 *p, u32 n) {
 
 // next-hop: адрес в своём сабнете — напрямую, иначе через шлюз (M14:
 // без этого HTTPS-репо за пределами 10.0.2.0/24 недостижимы)
-static int ip_tx(u32 dst, u8 proto, const u8 *payload, u32 plen) {
+// src отдельным параметром: DHCP до бинда шлёт с 0.0.0.0
+static int ip_tx_from(u32 src, u32 dst, u8 proto, const u8 *payload, u32 plen) {
     u8 macdst[6];
-    u32 nh = ((dst & NET_MASK) == (NET_MY_IP & NET_MASK)) ? dst : NET_GW_IP;
-    if (arp_get(nh, macdst) < 0) return -1;
+    if (dst == 0xFFFFFFFFu) {
+        m_memset(macdst, 0xFF, 6);                 // limited broadcast: мимо ARP
+    } else {
+        u32 nh = ((dst & NET_MASK) == (src & NET_MASK)) ? dst : NET_GW_IP;
+        if (arp_get(nh, macdst) < 0) return -1;
+    }
     if (plen > ETH_MTU - 20) return -1;
     u8 *f = tx_frame();
     m_memcpy(f, macdst, 6);
@@ -233,13 +255,17 @@ static int ip_tx(u32 dst, u8 proto, const u8 *payload, u32 plen) {
     wbe16(ip + 4, (u16)(ip_id++ & 0xFFFF));
     wbe16(ip + 6, 0x4000);
     ip[8] = 64; ip[9] = proto;
-    wbe32(ip + 12, NET_MY_IP);
+    wbe32(ip + 12, src);
     wbe32(ip + 16, dst);
     wbe16(ip + 10, 0);
     u32 s = csum_run(ip, 20, 0);
     wbe16(ip + 10, csum_fin(s));
     m_memcpy(ip + 20, payload, plen);
     return nic_tx_commit((u32)(ETH_HDR + 20 + plen));
+}
+
+static int ip_tx(u32 dst, u8 proto, const u8 *payload, u32 plen) {
+    return ip_tx_from(NET_MY_IP, dst, proto, payload, plen);
 }
 
 // --- ICMP echo reply ---
@@ -270,6 +296,283 @@ static void icmp_input(const u8 *ip, u32 n) {
     o[20] = 0;                                         // echo reply
     wbe16(o + 22, csum_fin(csum_run(o + 20, plen, 0)));
     nic_tx_commit((u32)(ETH_HDR + 20 + plen));
+}
+
+// --- UDP + DHCP (M15, RFC 2131) ---
+#define PROT_UDP      17
+#define DHCP_SRV_PORT 67
+#define DHCP_CLI_PORT 68
+#define DHCP_MAGIC    0x63825363u
+
+// UDP-датаграмма: заголовок + payload, csum с pseudo-header (RFC 768)
+static int udp_tx(u32 src, u32 dst, u16 sport, u16 dport,
+                  const u8 *pl, u32 n) {
+    u8 pkt[8 + 320];
+    if (n > 320) return -1;
+    wbe16(pkt, sport); wbe16(pkt + 2, dport);
+    wbe16(pkt + 4, (u16)(8 + n)); wbe16(pkt + 6, 0);
+    m_memcpy(pkt + 8, pl, n);
+    u32 s = csum_run(pkt, 8 + n, 0);
+    s += (src >> 16) + (src & 0xFFFF) + (dst >> 16) + (dst & 0xFFFF)
+       + (PROT_UDP + 8 + n);
+    u16 c = csum_fin(s);
+    if (!c) c = 0xFFFF;                      // 0 запрещён (читается как "нет csum")
+    wbe16(pkt + 6, c);
+    return ip_tx_from(src, dst, PROT_UDP, pkt, 8 + n);
+}
+
+static void dhcp_input(const u8 *p, u32 n);
+
+static void udp_input(const u8 *ip, const u8 *u, u32 n) {
+    if (n < 8) return;
+    u32 len = (u32)rbe16(u + 4);
+    if (len < 8 || len > n) return;
+    u16 c = rbe16(u + 6);
+    if (c) {                                 // 0 = отправитель не считал
+        u32 src = rbe32(ip + 12), dst = rbe32(ip + 16);
+        u32 s = csum_run(u, len, 0);
+        s += (src >> 16) + (src & 0xFFFF) + (dst >> 16) + (dst & 0xFFFF)
+           + (PROT_UDP + len);
+        if (csum_fin(s)) return;
+    }
+    u16 dport = rbe16(u + 2);
+    if (dport == DHCP_CLI_PORT) dhcp_input(u + 8, len - 8);
+}
+
+#define DDISCOVER 1
+#define DOFFER    2
+#define DREQUEST  3
+#define DACK      5
+#define DNAK      6
+
+#define DS_OFF    0    // ждёт старта/пауза между раундами
+#define DS_DISC   1    // DISCOVER в полёте
+#define DS_REQ    2    // REQUEST (SELECTING) в полёте
+#define DS_BOUND  3    // аренда живёт, ждём T1
+#define DS_RENEW  4    // unicast-renewal, ждём ACK (до T2/expiry)
+
+static u32 dhcp_xid, dhcp_srv, dhcp_srvip, dhcp_timer, dhcp_tries;
+static u32 t1_at, exp_at;                    // тики: 1 тик = 50мс
+static u8 first_bind;
+static u8 fallback_set;
+
+// DHCP-кадр: 236 байт фикс + magic + опции
+static void dhcp_send(u8 type, u32 req_ip, u32 srv_id, u32 dst_ip, int bcast) {
+    u8 pkt[300];
+    m_memset(pkt, 0, 240);
+    pkt[0] = 1;                                          // BOOTREQUEST
+    pkt[1] = 1;                                          // htype: Ethernet
+    pkt[2] = 6;                                          // hlen
+    wbe32(pkt + 4, dhcp_xid);
+    if (!bcast) wbe32(pkt + 12, my_ip);                  // ciaddr (RENEW)
+    else wbe16(pkt + 10, 0x8000);                        // broadcast-флаг
+    m_memcpy(pkt + 28, mac, 6);                          // chaddr
+    pkt[236] = 99; pkt[237] = 130; pkt[238] = 83; pkt[239] = 99;
+    u8 *o = pkt + 240;
+    *o++ = 53; *o++ = 1; *o++ = type;
+    *o++ = 55; *o++ = 4; *o++ = 1; *o++ = 3; *o++ = 6; *o++ = 51;
+    if (type == DREQUEST && dhcp_st == DS_REQ) {         // SELECTING
+        *o++ = 50; *o++ = 4; wbe32(o, req_ip); o += 4;
+        *o++ = 54; *o++ = 4; wbe32(o, srv_id); o += 4;
+    }
+    *o++ = 255;
+    u32 src = bcast ? 0 : my_ip;
+    u32 dst = bcast ? 0xFFFFFFFFu : dst_ip;
+    udp_tx(src, dst, DHCP_CLI_PORT, DHCP_SRV_PORT, pkt, (u32)(o - pkt));
+}
+
+static int ip2str(u32 ip, char *out) {
+    int n = 0;
+    u32 v[4] = { ip >> 24, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF };
+    for (int i = 0; i < 4; i++) {
+        u32 x = v[i];
+        if (x >= 100) out[n++] = (char)('0' + x / 100);
+        if (x >= 10) out[n++] = (char)('0' + (x / 10) % 10);
+        out[n++] = (char)('0' + x % 10);
+        if (i < 3) out[n++] = '.';
+    }
+    return n;
+}
+
+// DNS-опция 6 -> /etc/resolv.conf (его читают netsh/xbps; resolv.conf
+// из mkinitramfs — только первый загрузочный мир, DHCP его перекрывает)
+static void resolv_conf_write(void) {
+    if (!dns1) return;
+    long fd = sys3(SYS_open, (long)"/etc/resolv.conf",
+                   O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    char b[80];
+    int n = 0;
+    m_memcpy(b, "nameserver ", 11); n += 11;
+    n += ip2str(dns1, b + n);
+    b[n++] = '\n';
+    if (dns2) {
+        m_memcpy(b + n, "nameserver ", 11); n += 11;
+        n += ip2str(dns2, b + n);
+        b[n++] = '\n';
+    }
+    sys3(SYS_write, fd, (long)b, n);
+    sys3(SYS_close, fd, 0, 0);
+}
+
+static void print_ip(u32 ip) {
+    print_dec_n((long)(ip >> 24)); P(".");
+    print_dec_n((long)((ip >> 16) & 0xFF)); P(".");
+    print_dec_n((long)((ip >> 8) & 0xFF)); P(".");
+    print_dec_n((long)(ip & 0xFF));
+}
+
+static void dhcp_unconfig(void) {
+    my_ip = 0; my_mask = 0; my_gw = 0;
+    addr_set = 0; ac_ok = 0;
+    t1_at = 0; exp_at = 0;
+}
+
+static void dhcp_bind(u32 yi, u32 mask, u32 gw, u32 d1, u32 d2, u32 lease_s) {
+    my_ip = yi;
+    my_mask = mask ? mask : 0xFFFFFF00u;
+    my_gw = gw;
+    dns1 = d1; dns2 = d2;
+    addr_set = 1; ac_ok = 0;                 // ARP-кэш под новый адрес
+    if (lease_s && lease_s != 0xFFFFFFFFu) {
+        t1_at = now_t + (lease_s / 2) * 20;
+        exp_at = now_t + (lease_s / 2 + lease_s / 4) * 20;   // T2 = 75%
+    } else {
+        t1_at = 0; exp_at = 0;
+    }
+    dhcp_st = DS_BOUND;
+    if (!first_bind) {
+        first_bind = 1;
+        P("netd: DHCP OK ip="); print_ip(my_ip);
+        P(" mask="); print_ip(my_mask);
+        P(" gw="); print_ip(my_gw);
+        if (dns1) { P(" dns="); print_ip(dns1); }
+        P("\n");
+        resolv_conf_write();
+    } else {
+        P("netd: DHCP renew ip="); print_ip(my_ip); P("\n");
+    }
+}
+
+static void dhcp_input(const u8 *p, u32 n) {
+    if (n < 240 || p[0] != 2 || p[1] != 1 || p[2] != 6) return;
+    if (rbe32(p + 236) != DHCP_MAGIC) return;
+    if (rbe32(p + 4) != dhcp_xid) return;
+    for (int i = 0; i < 6; i++)
+        if (p[28 + i] != mac[i]) return;
+    u8 t = 0, seen_end = 0;
+    u32 mask = 0, gw = 0, d1 = 0, d2 = 0, lease = 0, sid = 0;
+    const u8 *o = p + 240;
+    u32 on = n - 240;
+    while (on >= 2 && !seen_end) {
+        u8 c = o[0];
+        if (c == 0) { o++; on--; continue; }
+        if (c == 255) { seen_end = 1; break; }
+        u8 l = o[1];
+        if (l + 2 > on) break;
+        if (c == 53) t = o[2];
+        else if (c == 1 && l >= 4) mask = rbe32(o + 2);
+        else if (c == 3 && l >= 4) gw = rbe32(o + 2);
+        else if (c == 6 && l >= 4) {
+            d1 = rbe32(o + 2);
+            if (l >= 8) d2 = rbe32(o + 6);
+        } else if (c == 51 && l >= 4) lease = rbe32(o + 2);
+        else if (c == 54 && l >= 4) sid = rbe32(o + 2);
+        o += l + 2; on -= l + 2;
+    }
+    if (!seen_end) return;                   // оборванный хвост — мимо
+    u32 yi = rbe32(p + 16);
+    if (dhcp_st == DS_DISC && t == DOFFER && yi) {
+        dhcp_yi = yi;
+        dhcp_srv = sid;
+        dhcp_srvip = sid ? sid : rbe32(p + 20);
+        dhcp_st = DS_REQ;
+        dhcp_tries = 0;
+        dhcp_timer = now_t + 2;              // REQUEST сразу
+        P("netd: DHCP OFFER ip="); print_ip(yi); P("\n");
+        return;
+    }
+    if ((dhcp_st == DS_REQ || dhcp_st == DS_RENEW) && t == DACK) {
+        dhcp_bind(yi, mask, gw, d1, d2, lease);
+        return;
+    }
+    if ((dhcp_st == DS_REQ || dhcp_st == DS_RENEW) && t == DNAK) {
+        P("netd: DHCP NAK — заново\n");
+        dhcp_unconfig();
+        dhcp_st = DS_OFF;                    // новый DISCOVER без паузы
+        dhcp_timer = 0;
+    }
+}
+
+static void dhcp_fallback(void) {
+    // slirp-статика: живёт на ISO-бутах/машинах без DHCP-сервера,
+    // DHCP продолжает пробовать в фоне
+    fallback_set = 1;
+    my_ip = 0x0A00020Fu; my_mask = 0xFFFFFF00u; my_gw = 0x0A000202u;
+    addr_set = 1;
+    P("netd: DHCP недоступен — fallback slirp-статика\n");
+}
+
+static void dhcp_tick(void) {
+    u32 t = now_t;
+    if (dhcp_st == DS_OFF) {
+        if (t < dhcp_timer) return;
+        dhcp_xid = 0x2B1D0000u ^ (t * 7919u) ^ ((u32)mac[3] << 16)
+                 ^ ((u32)mac[4] << 8) ^ mac[5];
+        dhcp_tries = 0;
+        dhcp_yi = 0;
+        dhcp_send(DDISCOVER, 0, 0, 0, 1);
+        dhcp_st = DS_DISC;
+        dhcp_timer = t + 80;                 // 4с
+        return;
+    }
+    if (dhcp_st == DS_DISC || dhcp_st == DS_REQ) {
+        if (t < dhcp_timer) return;
+        if (dhcp_tries < 3) {
+            dhcp_tries++;
+            if (dhcp_st == DS_DISC) dhcp_send(DDISCOVER, 0, 0, 0, 1);
+            else dhcp_send(DREQUEST, dhcp_yi, dhcp_srv, 0, 1);
+            dhcp_timer = t + 80 * (dhcp_tries + 1);
+            return;
+        }
+        dhcp_st = DS_OFF;
+        dhcp_timer = t + 320;                // 16с — следующая попытка
+        if (!addr_set && !fallback_set && t >= 480) dhcp_fallback();
+        return;
+    }
+    if (dhcp_st == DS_BOUND) {
+        if (exp_at && t >= exp_at) {         // аренда истекла — всё заново
+            P("netd: DHCP lease expired\n");
+            dhcp_unconfig();
+            dhcp_st = DS_OFF; dhcp_timer = 0;
+            return;
+        }
+        if (t1_at && t >= t1_at) {           // T1: unicast-продление
+            dhcp_st = DS_RENEW;
+            dhcp_tries = 0;
+            dhcp_xid ^= t * 31337u;
+            dhcp_send(DREQUEST, 0, 0, dhcp_srvip, 0);
+            dhcp_timer = t + 160;            // 8с между ретраями
+        }
+        return;
+    }
+    if (dhcp_st == DS_RENEW) {
+        if (exp_at && t >= exp_at) {
+            P("netd: DHCP lease expired (T2)\n");
+            dhcp_unconfig();
+            dhcp_st = DS_OFF; dhcp_timer = 0;
+            return;
+        }
+        if (t < dhcp_timer) return;
+        if (dhcp_tries < 8) {
+            dhcp_tries++;
+            dhcp_send(DREQUEST, 0, 0, dhcp_srvip, 0);
+            dhcp_timer = t + 160;
+        } else {                             // сервер умер: ищем новый
+            dhcp_unconfig();
+            dhcp_st = DS_OFF; dhcp_timer = 0;
+        }
+    }
 }
 
 // --- TCP ---
@@ -465,7 +768,10 @@ static void ip_input(const u8 *f, u32 n) {
     if (n < 20) return;
     const u8 *ip = f + ETH_HDR;
     u32 dst = rbe32(ip + 16);
-    if (dst != NET_MY_IP) return;
+    // DHCP-транзакция: ACK может прийти unicast'ом на предложенный адрес,
+    // которого у нас ещё нет
+    u32 yi = (dhcp_st == DS_REQ) ? dhcp_yi : 0;
+    if (dst != NET_MY_IP && dst != 0xFFFFFFFFu && dst != yi) return;
     // длина — из IP total length: slirp добивает короткие кадры нулями
     // до 60 байт (Ethernet минимум), нули не должны попадать в поток
     u32 plen = (u32)((ip[2] << 8) | ip[3]);
@@ -473,6 +779,7 @@ static void ip_input(const u8 *f, u32 n) {
     if (plen < ihl || plen > n - ETH_HDR) plen = n - ETH_HDR;
     if (ip[9] == 1) icmp_input(ip, plen);
     else if (ip[9] == 6) tcp_input(ip, ip + ihl, plen - ihl);
+    else if (ip[9] == 17) udp_input(ip, ip + ihl, plen - ihl);
 }
 
 static int nic_init(void) {
@@ -727,6 +1034,7 @@ static long bus_register(void) {
 
 static void timers(void) {
     now_t++;
+    dhcp_tick();
     for (int i = 0; i < NSOCK; i++) {
         struct sock *s = &S[i];
         if (s->state == SS_FREE) continue;
@@ -765,7 +1073,7 @@ void milin_main(void) {
         P("netd: шина не отвечает\n");
         sys3(SYS_exit, 1, 0, 0);
     }
-    P("netd: сервис \"net0\" (10.0.2.15 <- slirp)\n");
+    P("netd: сервис \"net0\" — адрес по DHCP\n");
 
     for (;;) {
         struct pfd fds[1 + NLANE];
