@@ -406,6 +406,29 @@ CLOSE, данные сервера — push'и NET_DATA/EOF владельцу �
   connect (ретраи happy-eyeballs libfetch);
 - цена: EVENTFD в ядре; boot-тест добавил e1000 + memmap-резерв + http-root.
 
+### M13 — динамический XBPS: настоящий пакетный менеджер над IPC ✅
+
+Финал директивы «glibc-полировка до динамического xbps с сетью»: в госте
+работает настоящий XBPS 0.60.7, слинкованный с glibc, и ставит пакеты из
+подписанного репозитория по HTTP через userspace-сеть.
+
+- мир Void в initramfs (`tools/get-void-xbps.sh`): xbps + libxbps +
+  libarchive + libcrypto3/libssl3 + zlib/zstd/lzma/lz4/bzip2/acl/attr +
+  glibc 2.41 — .xbps-пакеты распаковываются прямо в rootfs, /lib64 →
+  usr/lib, ld.so.cache от Void-ldconfig (в госте нет host-путей);
+- подписанный репо (`tools/mkrepo.sh`): xbps-create + xbps-rindex
+  (--sign репо, --sign-pkg пакет), ключ стабильный между сборками,
+  plist доверенного ключа предоврен гостю в /var/db/xbps/keys — e2e
+  репо валидируется установкой на хосте перед каждой сборкой;
+- `/sbin/xbpstest` (гейт): xbps-install -Syy hello -y → реподата →
+  .sig2 (RSA через libcrypto) → пакет → распаковка → /usr/bin/hello
+  (маркер **M13 OK**);
+- по пути: netd csum_fin не сворачивал перенос (сегменты с удачной
+  арифметикой проходили, «несчастливые» отбрасывались slirp — ловилось
+  только filter-dump'ом); netsh адресовал push'ы DATA/EOF индексом
+  таблицы вместо sid'а netd (где sid==слоту — работало, иначе вечно
+  молчаливый select в fetch_read).
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -425,6 +448,7 @@ CLOSE, данные сервера — push'и NET_DATA/EOF владельцу �
 | M10 | amdgpu в обрезанном дереве | ✅ сделано |
 | M11 | mlkd-фасад amdgpu | ✅ сделано |
 | M12 | userspace-сеть (netd + netsh) | ✅ сделано |
+| M13 | динамический XBPS над IPC | ✅ сделано |
 
 ## Честные оговорки
 
