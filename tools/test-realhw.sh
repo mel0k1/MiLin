@@ -61,6 +61,18 @@ run_boot nvme \
     -drive id=d2,if=none,format=raw,file="$DISK" \
     -device nvme,drive=d2,serial=MILIN01 || FAIL=1
 
+# e1000e (82574L — как Intel-NIC реальной машины): DHCP + сеть через netd
+run_boot nic-e1000e \
+    -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
+    -device e1000e,netdev=net0 -netdev user,id=net0 || FAIL=1
+if grep -q "DHCP OK" build/realhw-nic-e1000e.log; then
+    echo "   e1000e: DHCP OK"
+else
+    echo "   e1000e FAIL — DHCP не поднялся"
+    FAIL=1
+fi
+
 # VGA-консоль: без -nographic, дисплей пустой — ядро должно поднять tty0
 "$BIN" -m 512M $EXTRA -no-reboot -vga std -display none -serial stdio \
     -device virtio-rng-pci \

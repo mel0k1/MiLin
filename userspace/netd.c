@@ -118,6 +118,19 @@ static void udp_input(const u8 *ip, const u8 *u, u32 n);
 static void dhcp_tick(void);
 static u8 dhcp_st;
 static u32 dhcp_yi;
+static u8 *tx_frame(void);
+static int nic_tx_commit(u32 len);
+static void nic_poll(void);
+
+// --- NIC-слой (M15): e1000 / e1000e / r8169 за одним интерфеймом ---
+struct nic_ops {
+    const char *name;
+    u8 * (*txf)(void);
+    int  (*txc)(u32 len);
+    void (*poll)(void);
+    int  (*init)(long uiofd);
+};
+static struct nic_ops *nic;
 
 // RFC 1071: бегущая сумма (без финального дополнения)
 static u32 csum_run(const u8 *b, u32 n, u32 sum) {
@@ -144,9 +157,9 @@ static u32 txbuf(int i) { return OFF_TXBUF + (u32)i * RBUFSZ; }
 static u32 rxbuf(int i) { return OFF_RXBUF + (u32)i * RBUFSZ; }
 
 // буфер кадра текущего TX-дескриптора
-static u8 *tx_frame(void) { return dma + txbuf((int)tx_cur); }
+static u8 *e1000_txf(void) { return dma + txbuf((int)tx_cur); }
 
-static int nic_tx_commit(u32 len) {
+static int e1000_txc(u32 len) {
     volatile u8 *d = txd((int)tx_cur);
     d[8] = (u8)(len & 0xFF); d[9] = (u8)(len >> 8);   // length (LE)
     d[10] = 0;                                         // cso
@@ -165,7 +178,7 @@ static int nic_tx_commit(u32 len) {
     return -1;
 }
 
-static void nic_poll(void) {
+static void e1000_poll(void) {
     for (int n = 0; n < NDESC; n++) {
         volatile u8 *d = rxd((int)rx_cur);
         if (!(d[12] & 0x01)) break;                    // DD
@@ -782,76 +795,7 @@ static void ip_input(const u8 *f, u32 n) {
     else if (ip[9] == 17) udp_input(ip, ip + ihl, plen - ihl);
 }
 
-static int nic_init(void) {
-    // e1000 в UIO: /dev/uioN, чей PCI vendor/device = 0x8086/0x100e
-    long uiofd = -1;
-    char path[48];
-    char buf[16];
-    for (int i = 0; i < 8; i++) {
-        const char *p = "/dev/uio ";
-        m_memcpy(path, p, 9);
-        path[8] = (char)('0' + i);
-        path[9] = 0;
-        long fd = sys3(SYS_open, (long)path, O_RDWR, 0);
-        if (fd < 0) continue;
-        int ok = 1;
-        // /sys/class/uio/uioN/device/{vendor,device}
-        const char *sys = "/sys/class/uio/uio /device/vendor";
-        m_memcpy(path, sys, 34);
-        path[18] = (char)('0' + i);
-        path[34] = 0;
-        long v = sys3(SYS_open, (long)path, O_RDONLY, 0);
-        if (v < 0) {
-            P("netd: ");
-            print_str(path);
-            P(": vendor недоступен\n");
-            ok = 0;
-        } else {
-            long n = sys3(SYS_read, v, (long)buf, 12);
-            sys3(SYS_close, v, 0, 0);
-            if (n < 6 || buf[2] != '8' || buf[3] != '0' || buf[4] != '8'
-                || buf[5] != '6') ok = 0;
-        }
-        if (ok) {
-            const char *dev = "/sys/class/uio/uio /device/device";
-            m_memcpy(path, dev, 34);
-            path[18] = (char)('0' + i);
-            path[34] = 0;
-            v = sys3(SYS_open, (long)path, O_RDONLY, 0);
-            if (v < 0) ok = 0;
-            else {
-                long n = sys3(SYS_read, v, (long)buf, 12);
-                sys3(SYS_close, v, 0, 0);
-                if (n < 6 || buf[2] != '1' || buf[3] != '0' || buf[4] != '0'
-                    || buf[5] != 'e') ok = 0;
-            }
-        }
-        if (!ok) { sys3(SYS_close, fd, 0, 0); continue; }
-        // BUS MASTER обязателен: uio_pci_generic не ставит бит сам,
-        // без него DMA NIC'а уходит в никуда (MMIO при этом работает)
-        const char *cfg = "/sys/class/uio/uio /device/config";
-        m_memcpy(path, cfg, 34);
-        path[18] = (char)('0' + i);
-        path[34] = 0;
-        long cf = sys3(SYS_open, (long)path, O_RDWR, 0);
-        if (cf >= 0) {
-            u16 cmd = 0;
-            sys3(SYS_lseek, cf, 4, 0);          // PCI_COMMAND
-            if (sys3(SYS_read, cf, (long)&cmd, 2) == 2) {
-                cmd |= 0x0007;                  // IO | MEM | MASTER
-                sys3(SYS_lseek, cf, 4, 0);
-                sys3(SYS_write, cf, (long)&cmd, 2);
-            }
-            sys3(SYS_close, cf, 0, 0);
-        }
-        uiofd = fd;
-        break;
-    }
-    if (uiofd < 0) {
-        P("netd: /dev/uioN не найден\n");
-        return -1;
-    }
-
+static int e1000_init(long uiofd) {
     mmio = (volatile u32 *)sys6(SYS_mmap, 0, 0x20000, 1 | 2, 1, uiofd, 0);
     if ((long)mmio < 0) { P("netd: mmap BAR0 FAIL\n"); return -1; }
 
@@ -908,6 +852,293 @@ static int nic_init(void) {
     }
     P("\n");
     return 0;
+}
+
+// e1000e (82574): карта регистров совместима с e1000, дескрипторы — те же
+// legacy (DTYP=0 в RCTL; расширенные включаются только packet-split'ом).
+// Отличия: PCIe, ASPM-эррата — гасится в probe'е через config space.
+static int e1000e_init(long uiofd) {
+    if (e1000_init(uiofd) < 0) return -1;
+    P("netd: e1000e — legacy-дескрипторы, интрофф (polling)\n");
+    return 0;
+}
+
+// --- r8169 (RTL8168/8111, M15): C+ дескрипторы, polling ---
+// Регистры/биты — из ванильного r8169_main.c (7.2.9): опции в DW0/DW1,
+// адрес в DW2/DW3, Own=1 — владение NIC. QEMU rtl8169 не моделирует —
+// валидация только на реальном железе (BOOTS-гейт «r8169»).
+#define R_MAC0      0x0000
+#define R_MAC4      0x0004
+#define R_TXDLOW    0x0020
+#define R_TXDHIGH   0x0024
+#define R_CHIPCMD   0x0037
+#define R_TXCFG     0x0040
+#define R_RXCFG     0x0044
+#define R_RXMAXSZ   0x00da
+#define R_CPLUSCMD  0x00e0
+#define R_RXDLOW    0x00e4
+#define R_RXDHIGH   0x00e8
+#define R_MAXTXPKT  0x00ec
+
+#define RTL_OWN     (1u << 31)      // 1 = владение NIC
+#define RTL_EOR     (1u << 30)      // конец кольца
+#define RTL_FIRST   (1u << 29)
+#define RTL_LAST    (1u << 28)
+#define RTL_RXRES   (1u << 21)      // RxRES: ошибка приёма
+
+static void wle32(volatile u8 *p, u32 v) {
+    p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24);
+}
+static u32 rle32(const volatile u8 *p) {
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+}
+
+static volatile u32 *r_mmio;
+static u32 r_tx_cur, r_rx_cur;
+
+static u32 rr(u32 reg) { return r_mmio[reg >> 2]; }
+static void rw(u32 reg, u32 v) { r_mmio[reg >> 2] = v; }
+static u8 rr8(u32 reg) { return ((volatile u8 *)r_mmio)[reg]; }
+static void rw8(u32 reg, u8 v) { ((volatile u8 *)r_mmio)[reg] = v; }
+static void rw16(u32 reg, u16 v) { ((volatile u16 *)r_mmio)[reg >> 1] = v; }
+
+static volatile u8 *r_txd(int i) { return dma + OFF_TXRING + (u32)i * 16; }
+static volatile u8 *r_rxd(int i) { return dma + OFF_RXRING + (u32)i * 16; }
+static u32 r_txbuf(int i) { return OFF_TXBUF + (u32)i * RBUFSZ; }
+static u32 r_rxbuf(int i) { return OFF_RXBUF + (u32)i * RBUFSZ; }
+
+static u8 *r8169_txf(void) { return dma + r_txbuf((int)r_tx_cur); }
+
+static int r8169_txc(u32 len) {
+    volatile u8 *d = r_txd((int)r_tx_cur);
+    u64 a = dma_phys + r_txbuf((int)r_tx_cur);
+    wle32(d, RTL_OWN | RTL_FIRST | RTL_LAST | len);    // opts1
+    wle32(d + 4, 0);                                   // opts2: без offload
+    wle32(d + 8, (u32)a);
+    wle32(d + 12, (u32)(a >> 32));
+    for (int w = 0; w < 3000; w++) {
+        if (!(rle32(d) & RTL_OWN)) {                   // NIC подтвердил
+            r_tx_cur = (r_tx_cur + 1) % NDESC;
+            return 0;
+        }
+        sleep_ms(1);
+    }
+    P("r8169: TX OWN timeout len="); print_dec_n((long)len); P("\n");
+    return -1;
+}
+
+static void r8169_poll(void) {
+    for (int n = 0; n < NDESC; n++) {
+        volatile u8 *d = r_rxd((int)r_rx_cur);
+        u32 o1 = rle32(d);
+        if (o1 & RTL_OWN) break;                       // NIC не отдал кадр
+        u32 len = o1 & 0x1FFF;
+        if (len >= ETH_HDR + 20 && !(o1 & RTL_RXRES)) {
+            const u8 *f = dma + r_rxbuf((int)r_rx_cur);
+            u16 et = rbe16(f + 12);
+            if (et == 0x0806) arp_input(f + ETH_HDR, len - ETH_HDR);
+            else if (et == 0x0800) ip_input(f, len);
+        }
+        wle32(d, RTL_OWN | (o1 & RTL_EOR) | RBUFSZ);   // вернуть NIC
+        r_rx_cur = (r_rx_cur + 1) % NDESC;
+    }
+}
+
+static int r8169_init(long uiofd) {
+    r_mmio = (volatile u32 *)sys6(SYS_mmap, 0, 0x10000, 1 | 2, 1, uiofd, 0);
+    if ((long)r_mmio < 0) { P("r8169: mmap MMIO FAIL\n"); return -1; }
+
+    long pd = sys3(SYS_open, (long)"/dev/mlpinned", O_RDWR, 0);
+    if (pd < 0) { P("r8169: /dev/mlpinned FAIL\n"); return -1; }
+    dma = (u8 *)sys6(SYS_mmap, 0, 4u << 20, 1 | 2, 1, pd, 0);
+    if ((long)dma < 0) { P("r8169: mmap pinned FAIL\n"); return -1; }
+    u64 phys = 0;
+    if (sys3(SYS_ioctl, pd, 0x80086D01, (long)&phys) < 0) {
+        P("r8169: ioctl GETPHYS FAIL\n");
+        return -1;
+    }
+    dma_phys = phys;
+    m_memset(dma, 0, 4u << 20);
+
+    rw8(R_CHIPCMD, 0x10);                              // CmdReset
+    int ok = 0;
+    for (int w = 0; w < 100; w++) {
+        if (!(rr8(R_CHIPCMD) & 0x10)) { ok = 1; break; }
+        sleep_ms(1);
+    }
+    if (!ok) { P("r8169: reset timeout\n"); return -1; }
+
+    ((volatile u16 *)r_mmio)[0x3c >> 1] = 0;           // IntrMask: polling
+    rw8(R_MAXTXPKT, 0x3F);                             // NoEarlyTx/TxPacketMax
+    rw16(R_CPLUSCMD, (u16)(rr(R_CPLUSCMD) | 0x0008));  // PCIMulRW
+    ((volatile u16 *)r_mmio)[0xe2 >> 1] = 0;           // IntrMitigate
+    rw16(R_RXMAXSZ, RBUFSZ + 1);
+    rw8(0x56, (u8)(rr8(0x56) & ~0x01u));               // Config5: ASPM off
+
+    u32 m0 = rr(R_MAC0), m4 = rr(R_MAC4);
+    mac[0] = (u8)m0; mac[1] = (u8)(m0 >> 8);
+    mac[2] = (u8)(m0 >> 16); mac[3] = (u8)(m0 >> 24);
+    mac[4] = (u8)m4; mac[5] = (u8)(m4 >> 8);
+
+    u64 txp = dma_phys + OFF_TXRING;
+    u64 rxp = dma_phys + OFF_RXRING;
+    rw(R_TXDHIGH, (u32)(txp >> 32)); rw(R_TXDLOW, (u32)txp);
+    rw(R_RXDHIGH, (u32)(rxp >> 32)); rw(R_RXDLOW, (u32)rxp);
+
+    for (int i = 0; i < NDESC; i++) {                  // RX: отдать NIC
+        volatile u8 *d = r_rxd(i);
+        u64 a = dma_phys + r_rxbuf(i);
+        wle32(d + 4, 0);
+        wle32(d, RTL_OWN | ((i == NDESC - 1) ? RTL_EOR : 0) | RBUFSZ);
+        wle32(d + 8, (u32)a);
+        wle32(d + 12, (u32)(a >> 32));
+    }
+
+    rw8(R_CHIPCMD, 0x0C);                              // TE | RE
+    rw(R_RXCFG, (7u << 13) | (7u << 8) | (1u << 15) | 0x0F);
+    rw(R_TXCFG, (7u << 8) | (0x03u << 24));
+
+    P("netd: r8169 через UIO, MAC ");
+    for (int i = 0; i < 6; i++) {
+        if (i) P(":");
+        print_hex_flat((u32)mac[i] << 24);
+    }
+    P("\n");
+    return 0;
+}
+
+// --- таблица NIC + диспетчеризация ---
+static struct nic_ops e1000_ops = {
+    "e1000", e1000_txf, e1000_txc, e1000_poll, e1000_init
+};
+static struct nic_ops e1000e_ops = {
+    "e1000e", e1000_txf, e1000_txc, e1000_poll, e1000e_init
+};
+static struct nic_ops r8169_ops = {
+    "r8169", r8169_txf, r8169_txc, r8169_poll, r8169_init
+};
+
+static u8 *tx_frame(void) { return nic->txf(); }
+static int nic_tx_commit(u32 len) { return nic->txc(len); }
+static void nic_poll(void) { nic->poll(); }
+
+// "0x100e\n" -> 0x100e
+static int parse_hex16(const char *buf, long n) {
+    long v = 0;
+    int started = 0;
+    for (long i = 0; i < n; i++) {
+        char c = buf[i];
+        if (c == 'x' || c == 'X') { started = 1; v = 0; continue; }
+        if (c >= '0' && c <= '9') { v = v * 16 + c - '0'; started = 1; }
+        else if (c >= 'a' && c <= 'f') { v = v * 16 + c - 'a' + 10; started = 1; }
+        else if (c >= 'A' && c <= 'F') { v = v * 16 + c - 'A' + 10; started = 1; }
+        else if (started) break;
+    }
+    return started ? (int)v : -1;
+}
+
+// ASPM-эррата e1000e/r8169: LNKCTL (cap id 0x10) — очистить L0s/L1
+static void pcie_aspm_off(int idx) {
+    char path[48];
+    const char *cfg = "/sys/class/uio/uio /device/config";
+    m_memcpy(path, cfg, 34);
+    path[18] = (char)('0' + idx);
+    path[34] = 0;
+    long cf = sys3(SYS_open, (long)path, O_RDWR, 0);
+    if (cf < 0) return;
+    u8 c[256];
+    if (sys3(SYS_read, cf, (long)c, 256) < 48) {
+        sys3(SYS_close, cf, 0, 0);
+        return;
+    }
+    u8 next = c[0x34];
+    int guard = 0;
+    while (next >= 0x40 && next < 256 && guard++ < 16) {
+        if (c[next] == 0x10) {
+            u16 lnk = (u16)(c[next + 0x10] | (c[next + 0x11] << 8));
+            lnk &= (u16)~0x0003;
+            sys3(SYS_lseek, cf, next + 0x10, 0);
+            sys3(SYS_write, cf, (long)&lnk, 2);
+        }
+        next = c[next + 1];
+    }
+    sys3(SYS_close, cf, 0, 0);
+}
+
+static int nic_probe(void) {
+    static const struct {
+        u16 vendor, device;
+        const char *name;
+        struct nic_ops *ops;
+    } tbl[] = {
+        { 0x8086, 0x100e, "e1000",  &e1000_ops },
+        { 0x8086, 0x10d3, "e1000e", &e1000e_ops },
+        { 0x10ec, 0x8168, "r8169",  &r8169_ops },
+    };
+    int found = -1, idx = -1;
+    long uiofd = -1;
+    char path[48];
+    char buf[16];
+    for (int i = 0; i < 8; i++) {
+        const char *p = "/dev/uio ";
+        m_memcpy(path, p, 9);
+        path[8] = (char)('0' + i);
+        path[9] = 0;
+        long fd = sys3(SYS_open, (long)path, O_RDWR, 0);
+        if (fd < 0) continue;
+        const char *sys = "/sys/class/uio/uio /device/vendor";
+        m_memcpy(path, sys, 34);
+        path[18] = (char)('0' + i);
+        path[34] = 0;
+        long v = sys3(SYS_open, (long)path, O_RDONLY, 0);
+        if (v < 0) { sys3(SYS_close, fd, 0, 0); continue; }
+        long n = sys3(SYS_read, v, (long)buf, 12);
+        sys3(SYS_close, v, 0, 0);
+        int ven = parse_hex16(buf, n);
+        const char *dev = "/sys/class/uio/uio /device/device";
+        m_memcpy(path, dev, 34);
+        path[18] = (char)('0' + i);
+        path[34] = 0;
+        v = sys3(SYS_open, (long)path, O_RDONLY, 0);
+        if (v < 0) { sys3(SYS_close, fd, 0, 0); continue; }
+        n = sys3(SYS_read, v, (long)buf, 12);
+        sys3(SYS_close, v, 0, 0);
+        int dev_ = parse_hex16(buf, n);
+        for (u32 k = 0; k < sizeof(tbl) / sizeof(tbl[0]); k++) {
+            if (ven == (int)tbl[k].vendor && dev_ == (int)tbl[k].device) {
+                found = (int)k;
+                idx = i;
+                uiofd = fd;
+                break;
+            }
+        }
+        if (found >= 0) break;
+        sys3(SYS_close, fd, 0, 0);
+    }
+    if (found < 0) {
+        P("netd: /dev/uioN не найден (e1000/e1000e/r8169)\n");
+        return -1;
+    }
+    // BUS MASTER: uio_pci_generic не ставит бит сам — без него DMA мимо
+    const char *cfg = "/sys/class/uio/uio /device/config";
+    m_memcpy(path, cfg, 34);
+    path[18] = (char)('0' + idx);
+    path[34] = 0;
+    long cf = sys3(SYS_open, (long)path, O_RDWR, 0);
+    if (cf >= 0) {
+        u16 cmd = 0;
+        sys3(SYS_lseek, cf, 4, 0);                     // PCI_COMMAND
+        if (sys3(SYS_read, cf, (long)&cmd, 2) == 2) {
+            cmd |= 0x0007;                             // IO | MEM | MASTER
+            sys3(SYS_lseek, cf, 4, 0);
+            sys3(SYS_write, cf, (long)&cmd, 2);
+        }
+        sys3(SYS_close, cf, 0, 0);
+    }
+    pcie_aspm_off(idx);
+    nic = tbl[found].ops;
+    P("netd: NIC "); print_str(tbl[found].name); P("\n");
+    return nic->init(uiofd);
 }
 
 // --- сервис ---
@@ -1061,7 +1292,7 @@ struct pfd { int fd; short events, revents; };
 void milin_main(void) {
     for (int i = 0; i < NLANE; i++) L[i].fd = -1;
 
-    if (nic_init() < 0) {
+    if (nic_probe() < 0) {
         // без NIC (ISO-бут, реальная машина без e1000-класса) — не умирать:
         // рестарт-петля супервизора роняет бут; паркуемся, сеть просто нет
         P("netd: NIC не найден — паркуюсь\n");
