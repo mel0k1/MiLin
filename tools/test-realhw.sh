@@ -73,6 +73,30 @@ else
     FAIL=1
 fi
 
+# USB-клавиатуры (M15): xHCI (USB3-машины) и UHCI (старые Intel) —
+# usbcore + HCD + usbhid должны перечислить usb-kbd как input-устройство
+run_boot usb-xhci \
+    -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
+    -device qemu-xhci,id=xhci -device usb-kbd || FAIL=1
+if grep -q "input: QEMU QEMU USB Keyboard" build/realhw-usb-xhci.log; then
+    echo "   usb-xhci: клавиатура зарегистрирована"
+else
+    echo "   usb-xhci FAIL — usbhid не поднял клавиатуру"
+    FAIL=1
+fi
+
+run_boot usb-uhci \
+    -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
+    -device piix3-usb-uhci,id=u -device usb-kbd || FAIL=1
+if grep -q "input: QEMU QEMU USB Keyboard" build/realhw-usb-uhci.log; then
+    echo "   usb-uhci: клавиатура зарегистрирована"
+else
+    echo "   usb-uhci FAIL — usbhid не поднял клавиатуру"
+    FAIL=1
+fi
+
 # VGA-консоль: без -nographic, дисплей пустой — ядро должно поднять tty0
 "$BIN" -m 512M $EXTRA -no-reboot -vga std -display none -serial stdio \
     -device virtio-rng-pci \

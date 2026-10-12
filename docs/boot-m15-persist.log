@@ -1,0 +1,47 @@
+MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)
+supervisor: devtmpfs смонтирован на /dev
+supervisor: sysfs смонтирован
+supervisor: PCI-устройства из pci.ids отданы uio_pci_generic
+EXT4-fs (vda): mounted filesystem 53186131-f63a-45d6-954b-ad55fe9c1897 r/w with ordered data mode. Quota mode: disabled.
+supervisor: root=/dev/vda смонтирован (ext4)
+supervisor: seed постоянного корня (копия мира ~17МБ)...
+supervisor: SEED OK
+supervisor: switch_root OK — exec /sbin/init
+MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)
+supervisor: devtmpfs нет, /dev/fuse создан mknod
+supervisor: PCI-устройства из pci.ids отданы uio_pci_generic
+supervisor: манифестов: 11
+supervisor: старт mlbus (/sbin/mlbus): service
+supervisor: старт logsrv (/sbin/logsrv): service
+supervisor: старт uiod (/sbin/uiod): service
+supervisor: старт fused (/sbin/fused): service
+supervisor: старт netd (/sbin/netd): service
+supervisor: старт gpud (/sbin/gpud): service
+supervisor: старт client (/sbin/client): oneshot
+persistcheck: маркера нет — первый бут (пишется xbpstest'ом)
+supervisor: старт persistcheck (/sbin/persistcheck): oneshot
+supervisor: старт netclient (/sbin/netclient): oneshot
+supervisor: старт xbpstest (/sbin/xbpstest): oneshot
+supervisor: старт mnttest (/sbin/mnttest): oneshot
+supervisor: logsrv (pid 39) умер (сигнал 9) — перезапуск #1
+supervisor: logsrv перезапущен (pid 53)
+supervisor: mlbus (pid 38) умер (сигнал 9) — перезапуск #1
+supervisor: mlbus перезапущен (pid 55)
+xbpstest: dash rc=0
+M14 OK: real void repo (https) install + run over userspace network
+xbpstest: persist marker записан
+supervisor: все сервисы остановлены
+supervisor: клиент: OK
+supervisor: перезапусков сервисов за сессию: 2
+M7 OK: capability lanes + supervisor auto-restart
+M11 OK: mlkd amdgpu facade — one protocol, user/kernel placement
+MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)
+supervisor: devtmpfs смонтирован на /dev
+supervisor: sysfs смонтирован
+supervisor: PCI-устройства из pci.ids отданы uio_pci_generic
+EXT4-fs (vda): 1 orphan inode deleted
+EXT4-fs (vda): recovery complete
+EXT4-fs (vda): mounted filesystem 53186131-f63a-45d6-954b-ad55fe9c1897 r/w with ordered data mode. Quota mode: disabled.
+supervisor: root=/dev/vda смонтирован (ext4)
+supervisor: switch_root OK — exec /sbin/init
+supervisor: exec /sbin/init FAIL

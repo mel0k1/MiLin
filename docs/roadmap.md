@@ -429,6 +429,57 @@ CLOSE, данные сервера — push'и NET_DATA/EOF владельцу �
   таблицы вместо sid'а netd (где sid==слоту — работало, иначе вечно
   молчаливый select в fetch_read).
 
+### M14 — реальное железо и настоящий Void-репо ✅
+
+Директива «XBPS стучится в реальные библиотеки приложений Void Linux,
+система работает на реальном железе»:
+
+- конфиг-контракт (configs/milin.config): ATA/AHCI (ata_piix+ich9),
+  SCSI+sd, NVMe, virtio-blk, ext4, VT+VGA-консоль, AT-клавиатура,
+  EFI-stub — ядро грузится BIOS-ом и UEFI-ом без serial-первенства;
+- гибридный ISO (tools/mkimage.sh): El Torito BIOS + ESP UEFI,
+  GRUB-ядра собираются grub-mkimage'ом (offline-тулчейн, без root);
+- e2e-сеть: netd получил next-hop-маршрутизацию (шлюз вне /24),
+  DNS-over-TCP резолвер в netsh, TLS 1.2-потолок для openssl гостя
+  — xbpstest ставит dash из repo-default.voidlinux.org по https
+  с их подписью и ca-certificates (маркер **M14 OK**);
+- бут-гейты реального железа (tools/test-realhw.sh): virtio-blk /
+  AHCI / NVMe — ext4 roundtrip mnttest'ом, VGA-консоль (дисплей без
+  serial), маркеры **M14HW OK**.
+
+### M15 — настоящая сеть и постоянный корень ✅
+
+Одобрено: «DHCP в netd (UDP) для настоящей сети, r8169/e1000e,
+USB-клавиатуры, switch_root на постоянный ext4».
+
+- DHCP-клиент в netd (RFC 2131) поверх нового UDP-слоя (RFC 768,
+  pseudo-header csum): DISCOVER/OFFER/REQUEST/ACK, broadcast-флаг,
+  T1-renew unicast'ом, T2/lease-expiry распад, NAK-restart. Адресация
+  больше не зашита: my_ip/mask/gw — переменные, ip_tx получил
+  src-параметр (0.0.0.0 до бинда), limited broadcast мимо ARP.
+  DNS-опция 6 перезаписывает /etc/resolv.conf — netsh/xbps читают
+  его как раньше. Нет сервера — fallback slirp-статики через 24с,
+  DHCP продолжает пробовать в фоне. Гейт: **DHCP OK**;
+- NIC-слой netd: struct nic_ops {txf/txc/poll/init} + probe по PCI
+  vendor/device из sysfs. e1000e (82574L) — карта регистров
+  совместима, legacy-дескрипторы (DTYP=0), ASPM-эррата гасится через
+  PCIe config space (LNKCTL walk). r8169 (RTL8168/8111) — C+ дескрипторы
+  (Own=1 -> NIC, RingEnd, RxRES), регистры/биты из ванильного
+  r8169_main.c 7.2.9; QEMU rtl8169 не моделирует — валидация на
+  реальном железе. Гейт realhw nic-e1000e: DHCP на 82574L;
+- switch_root на постоянный ext4: root= из /proc/cmdline, guard «/init
+  есть только в initramfs». Пустой корень — seed: рекурсивная copytree
+  с lstat (симлинки сохраняются, /lib64 не разворачивается), 17МБ мира
+  + /init -> /sbin/init. Переезд: mount --move /dev /sys /proc,
+  mount --move /newroot /, chroot, exec /sbin/init — новый PID 1 живёт
+  на диске, xbps-установки переживают бут. e2e (tools/test-persist.sh):
+  бут A сеет+ставит, бут B читает маркер с диска (**PERSIST OK**);
+- USB-клавиатуры — обратная резня (форк mel0k1/linux @ 9f72159c):
+  drivers/usb (usbcore + xHCI/EHCI/UHCI) + drivers/hid (usbhid,
+  hid-generic) + fs/nls из v7.2. usbhid регистрирует клавиатуру в
+  input core, VT-консоль подхватывает. Гейты realhw: qemu-xhci и
+  piix3-usb-uhci с usb-kbd — **input: QEMU QEMU USB Keyboard**.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -449,6 +500,8 @@ CLOSE, данные сервера — push'и NET_DATA/EOF владельцу �
 | M11 | mlkd-фасад amdgpu | ✅ сделано |
 | M12 | userspace-сеть (netd + netsh) | ✅ сделано |
 | M13 | динамический XBPS над IPC | ✅ сделано |
+| M14 | реальное железо + настоящий Void-репо | ✅ сделано |
+| M15 | DHCP, r8169/e1000e, USB-клавиатуры, switch_root | ✅ сделано |
 
 ## Честные оговорки
 
