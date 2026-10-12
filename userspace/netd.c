@@ -147,7 +147,7 @@ static int nic_tx_commit(u32 len) {
         }
         sleep_ms(1);
     }
-    P("netd: TX DD timeout\n");
+    P("netd: TX DD timeout len="); print_dec_n((long)len); P("\n");
     return -1;
 }
 
@@ -216,10 +216,12 @@ static void arp_input(const u8 *p, u32 n) {
     }
 }
 
-// --- L3 исходящий ---
+// next-hop: адрес в своём сабнете — напрямую, иначе через шлюз (M14:
+// без этого HTTPS-репо за пределами 10.0.2.0/24 недостижимы)
 static int ip_tx(u32 dst, u8 proto, const u8 *payload, u32 plen) {
     u8 macdst[6];
-    if (arp_get(dst, macdst) < 0) return -1;
+    u32 nh = ((dst & NET_MASK) == (NET_MY_IP & NET_MASK)) ? dst : NET_GW_IP;
+    if (arp_get(nh, macdst) < 0) return -1;
     if (plen > ETH_MTU - 20) return -1;
     u8 *f = tx_frame();
     m_memcpy(f, macdst, 6);
@@ -281,7 +283,12 @@ static void push_msg(u32 sid, u32 msg_id, u32 err, const u8 *data, u32 n) {
     if (ln >= NLANE || L[ln].fd < 0) return;
     struct ml_msg m = { ML_PROTO_NET, msg_id, err, 0, {0} };
     *ml_h(&m, 0) = sid;
-    ml_send(L[ln].fd, &m, data, n, 0, 0);
+    long r = ml_send(L[ln].fd, &m, data, n, 0, 0);
+    if (r < 0 || (u32)r < 24 + n) {
+        P("netd: PUSH FAIL sid="); print_dec_n((long)sid);
+        P(" n="); print_dec_n((long)n);
+        P(" r="); print_dec_n(r); P("\n");
+    }
 }
 
 static void sk_free(struct sock *s) {
@@ -702,10 +709,11 @@ static void lane_input(struct lane *ln) {
 
 static long bus_register(void) {
     long bus = -1;
-    for (int tries = 0; ; tries++) {
+    int tries = 0;
+    for (; ; tries++) {
         bus = ml_connect("milin-bus");
         if (bus >= 0) break;
-        if (tries > 200) return -1;
+        if (tries > 2000) { P("netd: шина не поднялась за 20с\n"); return -1; }
         sleep_ms(10);
     }
     struct ml_msg m = { ML_PROTO_BUS, BUS_REGISTER, 0, 0, {0} };
