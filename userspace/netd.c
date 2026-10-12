@@ -113,7 +113,10 @@ static u32 csum_run(const u8 *b, u32 n, u32 sum) {
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return sum & 0xFFFF;
 }
-static u16 csum_fin(u32 sum) { return (u16)(~sum & 0xFFFF); }
+static u16 csum_fin(u32 sum) {
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (u16)(~sum & 0xFFFF);
+}
 
 // --- e1000 ---
 static u32 er(u32 reg) { return mmio[reg >> 2]; }
