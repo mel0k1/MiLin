@@ -34,12 +34,16 @@ gcc -O2 -o $R/sbin/xbpstest userspace/xbpstest.c
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh
-for p in xbps-0.60.7_1 libxbps-0.60.7_1 libarchive-3.8.9_1 libcrypto3-3.6.5_1 \
-         libssl3-3.6.5_1 openssl-3.6.5_1 zlib-1.3.2_1 libzstd-1.5.7_1 \
-         liblzma-5.8.3_1 liblz4-1.10.0_1 bzip2-1.0.8_2 acl-2.4.0_1 \
-         attr-2.6.0_1 glibc-2.41_1; do
-    cp -a build/void/ex/$p/. $R/
+for d in build/void/ex/*/; do
+    [ -f "$d/props.plist" ] || continue
+    cp -a "$d/." $R/
+    rm -f $R/props.plist $R/files.plist
 done
+# seed-shell: INSTALL-скрипты пакетов (xbps-triggers) исполняются chroot'ом
+# в rootfs и требуют /bin/sh ВНУТРИ root. Хостовый dash динамический, но его
+# GLIBC_* символы (<= 2.36) перекрываются миром Void (glibc 2.41).
+mkdir -p $R/bin
+cp /bin/sh $R/bin/sh
 # интерпретатор PT_INTERP=/lib64/ld-linux-x86-64.so.2; библиотеки живут в /usr/lib
 rm -rf $R/lib64 $R/lib
 ln -sfn usr/lib $R/lib64
@@ -48,13 +52,39 @@ ln -sfn usr/lib $R/lib
 # кэш — единственный надёжный резолвер NEEDED
 build/void/ex/glibc-2.41_1/usr/bin/ldconfig -r "$PWD/$R" 2>/dev/null || true
 ls -la $R/etc/ld.so.cache
-# минимальный /etc: passwd/group (xbps спрашивает uid), xbps.d — наш репо
+# минимальный /etc: passwd/group (xbps спрашивает uid)
 printf 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home:/bin/sh\n' > $R/etc/passwd
 printf 'root:x:0:\nuser:x:1000:\n' > $R/etc/group
+# M14: TLS-доверие — бандл + hash-ссылки (openssl rehash из мира Void),
+# дефолтные пути openssl: CAfile=/etc/ssl/cert.pem, CApath=/etc/ssl/certs
+mkdir -p $R/etc/ssl/certs
+cp -a build/void/ex/ca-certificates-*/usr/share/ca-certificates $R/usr/share/
+cat $R/usr/share/ca-certificates/mozilla/*.crt > $R/etc/ssl/certs/ca-certificates.crt
+cp $R/usr/share/ca-certificates/mozilla/*.crt $R/etc/ssl/certs/
+ln -sfn certs/ca-certificates.crt $R/etc/ssl/cert.pem
+# hash-ссылки: хостовой openssl (алгоритм subject-hash стандартный);
+# Void-openssl на хосте не стартует (OPENSSL_3.6.0 vs host libcrypto)
+openssl rehash "$PWD/$R/etc/ssl/certs" 2>/dev/null || true
+ls $R/etc/ssl/certs | head -3
+# M14: DNS (TCP:53 через netd) + НАСТОЯЩИЙ Void-репо (glibc-мир)
+printf 'nameserver 1.1.1.1\n' > $R/etc/resolv.conf
 mkdir -p $R/etc/xbps.d
-: > $R/etc/xbps.d/00-repository-main.conf     # тень Void-репо (в госте недостижим)
-echo "repository=http://10.0.2.2:8000/repo" > $R/etc/xbps.d/00-repo.conf
-# репо + предовренный ключ (tools/mkrepo.sh, соберёт и провалидирует репо)
-sh tools/mkrepo.sh
+echo "repository=https://repo-default.voidlinux.org/current" > $R/etc/xbps.d/00-repository-main.conf
+echo "repository=https://repo-default.voidlinux.org/current" > $R/etc/xbps.d/00-repo.conf
+# openssl: cert-пути + потолок TLS 1.2 (TLS 1.3 в связке с netd дал
+# загадочный mismatch сертификата — 1.2 оставляет cert на wire видимым)
+cat > $R/etc/ssl/openssl.cnf <<'EOF'
+openssl_conf = openssl_init
+
+[openssl_init]
+ssl_conf = ssl_sect
+
+[ssl_sect]
+system_default = system_default_sect
+
+[system_default_sect]
+MaxProtocol = TLSv1.2
+Groups = prime256v1
+EOF
 ( cd $R && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs.cpio.gz
 ls -lh build/initramfs.cpio.gz

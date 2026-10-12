@@ -1,27 +1,53 @@
 #!/bin/sh
-# M13: мир Void в госте — динамический xbps + библиотеки + glibc.
-# качает .xbps из repo-default.voidlinux.org (current, glibc), распаковывает
-# в build/void/ex/<pkg>. Кэш: повторный запуск ничего не качает.
+# M14: мир Void в госте — версии из ЖИВОГО репо, а не хардкод.
+# индекс: <repo>/<arch>-repodata (zstd -> tar -> index.plist); пакеты лежат
+# плоско: <repo>/<pkgver>.<arch>.xbps (xbps/lib/util.c: "%s/%s.%s.xbps").
+# ca-certificates — TLS-доверие для https-репо в госте.
 set -e
 MI="$(cd "$(dirname "$0")/.." && pwd)"
 V="$MI/build/void"
 EX="$V/ex"
 mkdir -p "$V" "$EX"
-Z=../../root/usr/bin/zstd
-[ -x /home/z/my-project/root/usr/bin/zstd ] && Z=/home/z/my-project/root/usr/bin/zstd
+Z=/home/z/my-project/root/usr/bin/zstd
 command -v zstd >/dev/null && Z="$(command -v zstd)"
 
 BASE=https://repo-default.voidlinux.org/current
-PKGS="xbps-0.60.7_1 libxbps-0.60.7_1 libarchive-3.8.9_1 libcrypto3-3.6.5_1 \
-libssl3-3.6.5_1 openssl-3.6.5_1 zlib-1.3.2_1 libzstd-1.5.7_1 liblzma-5.8.3_1 \
-liblz4-1.10.0_1 bzip2-1.0.8_2 acl-2.4.0_1 attr-2.6.0_1 glibc-2.41_1"
+ARCH=x86_64
+PKGS="xbps libxbps libarchive libcrypto3 libssl3 openssl zlib libzstd \
+liblzma liblz4 bzip2 acl attr glibc ca-certificates xbps-triggers"
 
-for p in $PKGS; do
-    f="$V/$p.x86_64.xbps"
-    [ -f "$f" ] || { echo "get-void: $p"; curl -sfLo "$f" "$BASE/$p.x86_64.xbps"; }
-    [ -d "$EX/$p" ] || {
-        mkdir -p "$EX/$p"
-        "$Z" -dc "$f" | tar -x -C "$EX/$p"
+# 1) живой индекс (кэш на 10 минут — версии крутятся)
+IDX="$V/repodata-$ARCH.cache"
+need=1
+[ -f "$IDX" ] && [ $(( $(date +%s) - $(stat -c %Y "$IDX") )) -lt 600 ] && need=0
+if [ "$need" = 1 ]; then
+    echo "get-void: индекс $BASE/$ARCH-repodata"
+    curl -sfL "$BASE/$ARCH-repodata" | "$Z" -dc > "$IDX.cache"
+    tar -xf "$IDX.cache" -O index.plist > "$IDX" 2>/dev/null
+    rm -f "$IDX.cache"
+fi
+
+# 2) pkgver каждого пакета из индекса
+getver() {
+    python3 - "$IDX" "$1" <<'PYEOF'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], 'rb'))
+idx = d.get('repository-index', d)
+p = idx.get(sys.argv[2])
+if not p:
+    sys.exit(f"пакета {sys.argv[2]} нет в индексе")
+print(p['pkgver'])
+PYEOF
+}
+
+# 3) скачать и распаковать
+for name in $PKGS; do
+    ver="$(getver "$name")"
+    f="$V/$ver.$ARCH.xbps"
+    [ -f "$f" ] || { echo "get-void: $ver"; curl -sfL --retry 5 --retry-all-errors -C - -o "$f" "$BASE/$ver.$ARCH.xbps"; }
+    [ -d "$EX/$ver" ] || {
+        mkdir -p "$EX/$ver"
+        "$Z" -dc "$f" | tar -x -C "$EX/$ver"
     }
 done
 echo "get-void: ex/ готово"

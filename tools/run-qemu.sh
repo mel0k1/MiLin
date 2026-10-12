@@ -30,14 +30,15 @@ python3 -m http.server 8000 --bind 127.0.0.1 -d build/http-root \
     > build/http.log 2>&1 &
 HTTP_PID=$!
 trap 'kill $HTTP_PID 2>/dev/null' EXIT
-"$BIN" -m 256M $EXTRA -nographic -no-reboot -vga none \
+"$BIN" -m 512M -cpu max $EXTRA -nographic -no-reboot -vga none \
     -device pci-testdev \
+    -device virtio-rng-pci \
     -device e1000,netdev=net0 -netdev user,id=net0 \
     -object filter-dump,id=f0,netdev=net0,file=build/net.pcap \
     -kernel build/bzImage -initrd build/initramfs.cpio.gz \
     -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000" < /dev/null > build/boot.log
 if grep -q "M11 OK" build/boot.log && grep -q "M12 OK" build/boot.log \
-   && grep -q "M13 OK" build/boot.log; then
+   && grep -q "M14 OK" build/boot.log; then
     echo "BOOT OK"
     exit 0
 fi
