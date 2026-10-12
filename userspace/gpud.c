@@ -176,7 +176,7 @@ static long bus_register(void) {
     for (int tries = 0; ; tries++) {
         bus = ml_connect("milin-bus");
         if (bus >= 0) break;
-        if (tries > 200) return -1;
+        if (tries > 2000) return -1;
         sleep_ms(10);
     }
     struct ml_msg m = { ML_PROTO_BUS, BUS_REGISTER, 0, 0, {0} };

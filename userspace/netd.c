@@ -754,8 +754,10 @@ void milin_main(void) {
     for (int i = 0; i < NLANE; i++) L[i].fd = -1;
 
     if (nic_init() < 0) {
-        P("netd: e1000/UIO не поднялся\n");
-        sys3(SYS_exit, 1, 0, 0);
+        // без NIC (ISO-бут, реальная машина без e1000-класса) — не умирать:
+        // рестарт-петля супервизора роняет бут; паркуемся, сеть просто нет
+        P("netd: NIC не найден — паркуюсь\n");
+        for (;;) sleep_ms(1000);
     }
 
     busfd = bus_register();

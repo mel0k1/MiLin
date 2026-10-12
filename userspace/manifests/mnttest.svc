@@ -1,0 +1,5 @@
+# M14: бут-хранение реального железа — ext4 mount-test (SKIP если диска нет)
+name=mnttest
+exec=/sbin/mnttest
+type=oneshot
+order=97
