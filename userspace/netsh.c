@@ -73,6 +73,8 @@ static int (*real_socket)(int, int, int);
 static int (*real_connect)(int, const struct sockaddr *, socklen_t);
 static int (*real_setsockopt)(int, int, int, const void *, socklen_t);
 static int (*real_getsockopt)(int, int, int, void *, socklen_t *);
+static ssize_t (*real_recvfrom)(int, void *, size_t, int,
+                                struct sockaddr *, socklen_t *);
 
 // --- таблица сокетов ---
 #define NSOCK 16
@@ -178,8 +180,10 @@ static void *reader(void *arg) {
             // R-ответы ищем по ждущему слоту (OPEN_R приходит ДО used=1)
             for (int i = 0; i < NSOCK; i++)
                 if (S[i].used && S[i].wait_id == (int)m.msg_id) { k = &S[i]; break; }
-        } else if (sid < NSOCK && S[sid].used) {
-            k = &S[sid];
+        } else {
+            // push'и адресуются sid'ом netd, а не слотом таблицы
+            for (int i = 0; i < NSOCK; i++)
+                if (S[i].used && S[i].sid == sid) { k = &S[i]; break; }
         }
         if (k) {
             if (m.msg_id >= NET_OPEN_R && m.msg_id <= NET_CLOSE_R
@@ -235,6 +239,7 @@ static void init_once(void) {
     real_connect = dlsym(RTLD_NEXT, "connect");
     real_setsockopt = dlsym(RTLD_NEXT, "setsockopt");
     real_getsockopt = dlsym(RTLD_NEXT, "getsockopt");
+    real_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
 
     lane = bus_lookup_net();
     if (lane >= 0) {
@@ -360,10 +365,10 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
 
 static ssize_t sock_read(struct nsock *k, void *buf, size_t n) {
     pthread_mutex_lock(&tab_m);
-    while (k->rxlen == 0 && k->state == 2) {
+    while (k->rxlen == 0 && k->state == 2)
         pthread_cond_wait(&k->c, &tab_m);
-    }
     size_t take = k->rxlen < n ? k->rxlen : n;
+    ssize_t ret;
     if (take) {
         memcpy(buf, k->rx, take);
         memmove(k->rx, k->rx + take, k->rxlen - take);
@@ -372,12 +377,12 @@ static ssize_t sock_read(struct nsock *k, void *buf, size_t n) {
             u64 v;
             real_read(k->efd, &v, 8);      // сброс события
         }
-    } else if (k->state == 3 || k->state == 4) {
-        pthread_mutex_unlock(&k->m);
-        return 0;                          // EOF / ошибка читается как EOF
+        ret = (ssize_t)take;
+    } else {
+        ret = 0;                           // EOF / ошибка читается как EOF
     }
-    pthread_mutex_unlock(&k->m);
-    return (ssize_t)take;
+    pthread_mutex_unlock(&tab_m);
+    return ret;
 }
 
 ssize_t read(int fd, void *buf, size_t n) {
@@ -392,10 +397,10 @@ ssize_t recv(int fd, void *buf, size_t n, int flags) {
     struct nsock *k = sock_by_fd(fd);
     if (!k) return real_recv(fd, buf, n, flags);
     if (flags & MSG_PEEK) {
-        pthread_mutex_lock(&k->m);
+        pthread_mutex_lock(&tab_m);
         size_t take = k->rxlen < n ? k->rxlen : n;
         memcpy(buf, k->rx, take);
-        pthread_mutex_unlock(&k->m);
+        pthread_mutex_unlock(&tab_m);
         return (ssize_t)take;
     }
     return sock_read(k, buf, n);
@@ -425,6 +430,32 @@ ssize_t send(int fd, const void *buf, size_t n, int flags) {
     return write(fd, buf, n);
 }
 
+// libfetch ходит именно через sendto/recvfrom
+ssize_t sendto(int fd, const void *buf, size_t n, int flags,
+               const struct sockaddr *sa, socklen_t sl) {
+    (void)sa; (void)sl;
+    return send(fd, buf, n, flags);
+}
+
+ssize_t recvfrom(int fd, void *buf, size_t n, int flags,
+                 struct sockaddr *sa, socklen_t *sl) {
+    init_once();
+    struct nsock *k = sock_by_fd(fd);
+    if (!k) {
+        if (!real_recvfrom)
+            real_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
+        return real_recvfrom(fd, buf, n, flags, sa, sl);
+    }
+    ssize_t r = recv(fd, buf, n, flags);
+    if (sa && sl && *sl >= sizeof(struct sockaddr_in)) {
+        struct sockaddr_in *in = (struct sockaddr_in *)sa;
+        memset(in, 0, sizeof(*in));
+        in->sin_family = AF_INET;
+        *sl = sizeof(*in);
+    }
+    return r;
+}
+
 int close(int fd) {
     init_once();
     struct nsock *k = sock_by_fd(fd);
@@ -438,6 +469,8 @@ int close(int fd) {
     return real_close(fd);
 }
 
+static int poll_wait(struct pollfd *, nfds_t, int);
+
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     init_once();
     // есть ли наши сокеты среди дескрипторов?
@@ -445,6 +478,10 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     for (nfds_t i = 0; i < nfds; i++)
         if (sock_by_fd(fds[i].fd)) ours = 1;
     if (!ours) return real_poll(fds, nfds, timeout);
+    return poll_wait(fds, nfds, timeout);
+}
+
+static int poll_wait(struct pollfd *fds, nfds_t nfds, int timeout) {
 
     long deadline = timeout >= 0 ? now_ms() + timeout : -1;
     for (;;) {
@@ -486,8 +523,6 @@ int fcntl(int fd, int cmd, ...) {
     if (cmd == F_SETFL) return 0;
     return 0;
 }
-
-// DEBUG: перехват getaddrinfo — что и почему резолвится
 static int (*real_getaddrinfo)(const char *, const char *,
                                const struct addrinfo *, struct addrinfo **);
 int getaddrinfo(const char *host, const char *serv,
@@ -495,12 +530,7 @@ int getaddrinfo(const char *host, const char *serv,
     init_once();
     if (!real_getaddrinfo)
         real_getaddrinfo = dlsym(RTLD_NEXT, "getaddrinfo");
-    int rc = real_getaddrinfo(host, serv, hints, res);
-    fprintf(stderr, "netsh: getaddrinfo(%s, %s, fam=%d) rc=%d%s\n",
-            host ? host : "(null)", serv ? serv : "(null)",
-            hints ? hints->ai_family : 0, rc,
-            rc ? gai_strerror(rc) : "");
-    return rc;
+    return real_getaddrinfo(host, serv, hints, res);
 }
 
 int setsockopt(int fd, int level, int opt, const void *v, socklen_t l) {
