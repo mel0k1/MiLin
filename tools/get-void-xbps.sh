@@ -14,7 +14,8 @@ command -v zstd >/dev/null && Z="$(command -v zstd)"
 BASE=https://repo-default.voidlinux.org/current
 ARCH=x86_64
 PKGS="xbps libxbps libarchive libcrypto3 libssl3 openssl zlib libzstd \
-liblzma liblz4 bzip2 acl attr glibc ca-certificates xbps-triggers"
+liblzma liblz4 bzip2 acl attr glibc ca-certificates xbps-triggers \
+e2fsprogs e2fsprogs-libs syslinux libblkid libuuid util-linux-common libsmartcols"
 
 # 1) живой индекс (кэш на 10 минут — версии крутятся)
 IDX="$V/repodata-$ARCH.cache"

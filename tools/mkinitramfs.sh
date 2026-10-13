@@ -34,6 +34,12 @@ gcc -O2 -o $R/sbin/xbpstest userspace/xbpstest.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/mnttest userspace/mnttest.c
 # M15: проверка персистентности switch_root
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/persistcheck userspace/persistcheck.c
+# M19: видимая система — getty/login, инсталлятор, poweroff/reboot
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/getty userspace/getty.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/login userspace/login.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/minstall userspace/minstall.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/poweroff userspace/poweroff.c
+gcc -static -nostdlib -ffreestanding -O2 -DML_REBOOT=1 -o $R/sbin/reboot userspace/poweroff.c
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh
@@ -56,8 +62,15 @@ ln -sfn usr/lib $R/lib
 build/void/ex/glibc-2.41_1/usr/bin/ldconfig -r "$PWD/$R" 2>/dev/null || true
 ls -la $R/etc/ld.so.cache
 # минимальный /etc: passwd/group (xbps спрашивает uid)
-printf 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home:/bin/sh\n' > $R/etc/passwd
+printf 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n' > $R/etc/passwd
 printf 'root:x:0:\nuser:x:1000:\n' > $R/etc/group
+# M19: пароли sha512-crypt (root/milin, user/user — см. realhw.md) + mtab
+mkdir -p $R/home/user
+printf 'root:%s:19800:0:99999:7:::\nuser:%s:19800:0:99999:7:::\n' \
+    "$(openssl passwd -6 -salt MiLinR00t milin)" \
+    "$(openssl passwd -6 -salt MiLinUser user)" > $R/etc/shadow
+chmod 600 $R/etc/shadow
+ln -sfn /proc/mounts $R/etc/mtab
 # M14: TLS-доверие — бандл + hash-ссылки (openssl rehash из мира Void),
 # дефолтные пути openssl: CAfile=/etc/ssl/cert.pem, CApath=/etc/ssl/certs
 mkdir -p $R/etc/ssl/certs
@@ -89,5 +102,16 @@ system_default = system_default_sect
 MaxProtocol = TLSv1.2
 Groups = prime256v1
 EOF
+# M19: payload инсталлятора — ядро + мини-initramfs (только /init) в /boot;
+# установленный корень получает мир с диска, полный initramfs на диск не пишется
+RI=build/rootfs-install
+rm -rf $RI
+mkdir -p $RI/dev $RI/newroot $RI/proc $RI/sys $RI/tmp
+gcc -static -nostdlib -ffreestanding -O2 -o $RI/init userspace/supervisor.c
+( cd $RI && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs-install.cpio.gz
+mkdir -p $R/boot
+cp build/bzImage $R/boot/vmlinuz
+cp build/initramfs-install.cpio.gz $R/boot/initramfs.cpio.gz
+ls -lh $R/boot
 ( cd $R && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs.cpio.gz
-ls -lh build/initramfs.cpio.gz
+ls -lh build/initramfs.cpio.gz build/initramfs-install.cpio.gz
