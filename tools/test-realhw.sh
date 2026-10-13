@@ -1,11 +1,13 @@
 #!/bin/sh
-# test-realhw.sh (M14): бут-гейты реального железа.
+# test-realhw.sh (M14/M16): бут-гейты реального железа.
 # 1) virtio-blk + ext4 (быстрый QEMU-путь, тот же контракт что и SATA/NVMe)
 # 2) AHCI/SATA (q35 — как SATA-контроллер реальной машины)
 # 3) NVMe (как NVMe-SSD реальной машины)
 # 4) VGA-консоль (реальное железо без serial)
 # каждый гейт: ядро + initramfs грузятся, mnttest монтирует ext4 и гоняет
 # roundtrip; маркер M14HW OK в логе — гейт пройден.
+# M16: -smp 4 везде; машины pc-i440fx-2.5/q35-2.9 — MPS legacy-BIOS несёт
+# все CPU (современные типы машин отдали AP-перечисление ACPI MADT — M17).
 set -e
 cd "$(dirname "$0")/.."
 export PATH=/home/z/my-project/root/usr/bin:$PATH
@@ -49,20 +51,24 @@ run_boot() {
 
 FAIL=0
 run_boot virtio \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" || FAIL=1
 
 run_boot ahci \
-    -machine q35 -device virtio-rng-pci \
+    -machine pc-q35-2.9 -smp 4 -device virtio-rng-pci \
     -device ich9-ahci,id=ahci -device ide-hd,drive=d1,bus=ahci.0 -drive id=d1,if=none,format=raw,file="$DISK" || FAIL=1
 
 run_boot nvme \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -drive id=d2,if=none,format=raw,file="$DISK" \
     -device nvme,drive=d2,serial=MILIN01 || FAIL=1
 
-# e1000e (82574L — как Intel-NIC реальной машины): DHCP + сеть через netd
+# e1000e (82574L — как Intel-NIC реальной машины): DHCP + сеть через netd;
+# M16: DHCP на 4-CPU системе
 run_boot nic-e1000e \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
     -device e1000e,netdev=net0 -netdev user,id=net0 || FAIL=1
@@ -76,6 +82,7 @@ fi
 # USB-клавиатуры (M15): xHCI (USB3-машины) и UHCI (старые Intel) —
 # usbcore + HCD + usbhid должны перечислить usb-kbd как input-устройство
 run_boot usb-xhci \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
     -device qemu-xhci,id=xhci -device usb-kbd || FAIL=1
@@ -87,6 +94,7 @@ else
 fi
 
 run_boot usb-uhci \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
     -device piix3-usb-uhci,id=u -device usb-kbd || FAIL=1
@@ -99,6 +107,7 @@ fi
 
 # VGA-консоль: без -nographic, дисплей пустой — ядро должно поднять tty0
 "$BIN" -m 512M $EXTRA -no-reboot -vga std -display none -serial stdio \
+    -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -kernel build/bzImage -initrd build/initramfs.cpio.gz \
     -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000" \
