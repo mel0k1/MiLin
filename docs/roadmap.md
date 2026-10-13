@@ -560,6 +560,51 @@ poweroff/reboot».
 - осталось из «современного x86»: x2APIC — за IRQ_REMAP (drivers/iommu
   вырезан), IOMMU/DMA-remap — отдельным этапом.
 
+### M19 — MiLini как устанавливаемая ОС ✅
+
+Одобрено: «M19 «MiLini как устанавливаемая ОС»: инсталлятор, getty/login,
+обновление realhw.md».
+
+- getty/login: /sbin/getty — подсказка входа на /dev/console (реальное
+  железо: tty0/fbcon или VGA text, гейты: ttyS0), setsid + TIOCSCTTY,
+  сессия = fork -> /sbin/login; /sbin/login — /etc/passwd + /etc/shadow
+  (**sha512-crypt**, userspace/crypt.h: SHA-512 + transpose-base64 без
+  libc, верифицирован против openssl passwd -6 на 4 векторах), эхо
+  пароля гасится TCSETS, затем setgid/setuid/chdir/umask и exec /bin/sh
+  (-sh — login shell); аккаунты root/milin и user/user, /etc/shadow
+  генерится mkinitramfs.sh хостовым openssl passwd -6;
+- minstall: /sbin/minstall /dev/sdX (или cmdline install=) — mkfs.ext4 на
+  диск целиком (syslinux 6.03 не читает 64bit/metadata_csum), копия мира
+  (копир сохраняет режимы), /init -> /sbin/init, маркер
+  /etc/milin/.installed, /boot с vmlinuz + мини-initramfs (12 КиБ,
+  только /init — мир приезжает с диска), extlinux.conf
+  (root= + rw + консольные параметры установочной сессии), extlinux
+  --install — boot-сектор пишется через ФС (ext4 оставляет 1 КиБ под
+  него). Цель — диск без таблицы партиций: живой BLKRRPART-рескан в
+  ядре отдаёт устаревший кэш attach-скана (страница сектора 0 не
+  сбрасывается) — таблица партиций кандидатом в M20;
+- супервизор: установленная система (маркер .installed, /init
+  отсутствует) не завершается после oneshot'ов — getty держит вход,
+  выход только poweroff/reboot (S5/рестарт); live-сессия ведёт себя
+  как раньше (exit после всех oneshot'ов); install= сеет сессию
+  установки — сервисы + инсталлятор, без демо-oneshot'ов;
+- мир: e2fsprogs + syslinux (Void, usr-merge: /usr/bin/mkfs.ext4,
+  /usr/bin/extlinux) + libblkid/libuuid/util-linux-common;
+  /sbin/poweroff и /sbin/reboot теперь в живой системе;
+- гейт test-install.sh — **INSTALL GATES OK**: бут A (live, q35
+  ich9-ahci): MINSTALL OK; бут B (без -kernel): SeaBIOS -> extlinux ->
+  ядро + мини-initramfs -> switch_root -> login root (sha512-crypt) ->
+  root shell -> login user (setuid 1000) -> user shell -> poweroff
+  (**reboot: Power down**). Регрессии зелёные: run-qemu.sh (BOOT +
+  SMP OK), test-realhw.sh (**REALHW GATES OK**, 10 гейтов),
+  test-acpi.sh (POWEROFF + REBOOT OK), test-persist.sh (**PERSIST
+  GATES OK**). Логи: docs/boot-m19-install.log,
+  docs/boot-m19-login.log;
+- осталось: UEFI-бут установленного диска (extlinux — BIOS-only,
+  нужен GRUB EFI/gummiboot или EFISTUB-путь), таблица партиций
+  (BLKRRPART-рескан), смена пароля в госте (passwd/shadow-утилиты),
+  utmp/wtmp.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -585,6 +630,7 @@ poweroff/reboot».
 | M16 | современный x86: SMP, PCI_MSI, HIGH_RES_TIMERS | ✅ сделано |
 | M17 | ACPI: MADT, _PRT, S5 poweroff/reboot | ✅ сделано |
 | M18 | видимая система: fbcon + EFI-fb, psmouse, usb-storage | ✅ сделано |
+| M19 | MiLini как устанавливаемая ОС: инсталлятор, getty/login | ✅ сделано |
 
 ## Честные оговорки
 
