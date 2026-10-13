@@ -43,7 +43,14 @@ int main(void) {
         0
     };
     char *install[] = { "/usr/bin/xbps-install", "-S", "dash", "-y", 0 };
-    int rc = run(install, env);
+    // сеть userspace переживает каскад шины (M7.2): попытки xbps-install
+    // разнесены, чтобы slirp/TLS-шум реального репо не ронял гейт
+    int rc = -1;
+    for (int attempt = 0; attempt <= 2; attempt++) {
+        if (attempt) sleep(1);
+        rc = run(install, env);
+        if (rc == 0) break;
+    }
     printf("xbpstest: xbps-install rc=%d\n", rc);
     if (rc != 0)
         return 1;

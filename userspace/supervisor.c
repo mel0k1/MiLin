@@ -441,7 +441,12 @@ static int gpu_info_ok(long fd, long lane, const char *who) {
 }
 
 static int gpu_demo(void) {
-    gpu_bus = ml_connect("milin-bus");
+    // шина поднимается параллельно с демо (форк не гарантирует готовность)
+    for (int tries = 0; tries <= 200; tries++) {
+        gpu_bus = ml_connect("milin-bus");
+        if (gpu_bus >= 0) break;
+        sleep_ms(10);
+    }
     if (gpu_bus < 0) {
         P("m11: шина недоступна\n");
         return 1;
