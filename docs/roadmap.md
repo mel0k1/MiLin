@@ -480,6 +480,41 @@ USB-клавиатуры, switch_root на постоянный ext4».
   input core, VT-консоль подхватывает. Гейты realhw: qemu-xhci и
   piix3-usb-uhci с usb-kbd — **input: QEMU QEMU USB Keyboard**.
 
+### M16 — современный x86: SMP, MSI, oneshot-таймеры ✅
+
+Одобрено: «M16 «современный x86»: APIC + SMP + PCI_MSI + HPET — четыре
+config-флипа и швы, гейты в QEMU (-smp 4 + DHCP на e1000e)».
+
+- аудит аудитом, но факты оказались интереснее: X86_LOCAL_APIC,
+  X86_IO_APIC, HPET_TIMER и X86_MPPARSE — def_bool y на x86_64 и
+  были включены дефолтом с M1: ядро MiLin всё это время жило на
+  LAPIC-таймере и IO-APIC, «PIC-картина» из M2 — иллюзия tinyconfig.
+  Реально флипаются три: **CONFIG_SMP=y, CONFIG_NR_CPUS=8** (tinyconfig
+  молча держит NR_CPUS=1 даже при SMP=y — olddefconfig его сохраняет),
+  **CONFIG_PCI_MSI=y** (GENERIC_MSI_IRQ по select) и
+  **CONFIG_HIGH_RES_TIMERS=y** (oneshot-режим clockevent — на PIT-less
+  чипсетах это единственный таймер вообще). Швов не потребовалось —
+  kernel/smp*, arch/x86/kernel/{smp,apic,hpet}.c резня не трогала;
+  bzImage 2.0 -> 2.1 МиБ;
+- открытие про перечисление CPU: на современных типах машин QEMU
+  (SeaBIOS 1.16.3) кладёт в MPS-таблицу ТОЛЬКО boot-CPU — AP-перечисление
+  переехало в ACPI MADT (которого у нас нет до M17), и SMP-гейт на
+  pc-10.0 честно поднимает 1 CPU из 4. Гейты переведены на
+  совместимые машины (pc-i440fx-2.5 / pc-q35-2.9): там MPS legacy-BIOS
+  несёт все процессоры — **smp: Brought up 1 node, 4 CPUs**. Честная
+  цена: -cpu max на этих машинах роняет загрузчик SeaBIOS ("requires
+  an x86-64 CPU") — убран, энтропия держится на virtio-rng (M14);
+- гейты: run-qemu.sh — BOOT OK + **SMP OK (4 CPUs)** (вся цепочка
+  M11/M12/M14 + DHCP на 4-процессорной системе); test-realhw.sh — все
+  7 гейтов с -smp 4 (virtio/ahci/nvme ext4-roundtrip, e1000e **DHCP
+  OK**, usb-xhci/usb-uhci, vga); test-persist.sh — **PERSIST GATES OK**
+  (switch_root/seed/установка переживают reboot при SMP). Логи:
+  docs/boot-m16-smp.log, docs/boot-m16-realhw-e1000e-smp.log;
+- что осталось от «современного x86»: AP-перечисление на настоящих
+  машинах = ACPI MADT → обратная резня drivers/acpi — следующий этап
+  (M17); x2APIC заблокирован зависимостью IRQ_REMAP (drivers/iommu
+  вырезан) — возвращается вместе с ним.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -502,6 +537,7 @@ USB-клавиатуры, switch_root на постоянный ext4».
 | M13 | динамический XBPS над IPC | ✅ сделано |
 | M14 | реальное железо + настоящий Void-репо | ✅ сделано |
 | M15 | DHCP, r8169/e1000e, USB-клавиатуры, switch_root | ✅ сделано |
+| M16 | современный x86: SMP, PCI_MSI, HIGH_RES_TIMERS | ✅ сделано |
 
 ## Честные оговорки
 
