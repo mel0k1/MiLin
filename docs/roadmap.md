@@ -515,6 +515,51 @@ config-флипа и швы, гейты в QEMU (-smp 4 + DHCP на e1000e)».
   (M17); x2APIC заблокирован зависимостью IRQ_REMAP (drivers/iommu
   вырезан) — возвращается вместе с ним.
 
+### M17 — ACPI: MADT, _PRT, S5 ✅
+
+Одобрено: «M17 «ACPI»: обратная резня drivers/acpi — MADT (многоядерность
+на настоящих машинах), _PRT (маршрутизация прерываний PCIe),
+poweroff/reboot».
+
+- обратная резня оказалась почти чистым откатом: drivers/acpi (ACPICA +
+  pci_root/_link/_irq + ec + sleep) и drivers/pnp (pnpacpi) вернулись из
+  v7.2 как есть (форк 4d7252896), а швов — три строки: source в меню PM
+  arch/x86/Kconfig (fix-dead-refs подчистил его в M3 — файла-то не было),
+  source pnp в drivers/Kconfig и obj-$(CONFIG_ACPI/PNP) в drivers/
+  Makefile. Все select'ы x86 (ARCH_SUPPORTS_ACPI,
+  ACPI_SYSTEM_POWER_STATES_SUPPORT и пр.) уцелели с M1 условными
+  («if ACPI») и заработали сами. C-швов ноль: сборка прошла с первого
+  захода, bzImage 2.1 -> 2.4 МиБ;
+- конфиг: CONFIG_ACPI=y + CONFIG_ACPI_MCFG=y (ECAM для q35: его никто
+  не select'ит, а mmconfig-shared ссылается на pci_mcfg.o);
+  ACPI_PROCESSOR/AC/BATTERY/BUTTON off — idle и P-состояния в
+  микроядерном мире живут в userspace-серверах;
+- закрытие открытия M16: на q35 (свежий тип машины) **Using ACPI (MADT)
+  for SMP configuration information** и **smp: Brought up 1 node,
+  4 CPUs** — там, где MPS несёт только boot-CPU. Многоядерность на
+  современных системах больше не зависит от legacy-MPS;
+- _PRT/PCI: **PCI: Using ACPI for IRQ routing** (в v7.2 строка переехала
+  в arch/x86/pci/acpi.c), pnp: **PnP ACPI: found N devices** — проход
+  namespace'а ACPICA; в живом буте виден и acpi_pci_link:
+  **ACPI: \_SB_.GSIH: Enabled at IRQ 23** — линк выдан UIO-устройству;
+- poweroff/reboot: sys_reboot дотянут до pm_power_off/machine_restart —
+  гейты S5 (**reboot: Power down**, qemu завершается сам) и рестарта
+  (**reboot: Restarting system** при -no-reboot); /sbin/poweroff и
+  /sbin/reboot — один исходник, два бинаря (userspace/poweroff.c);
+- бонусная находка: ACPI удлинил бут и вскрыл гонки, жившие с M7.2/M12 —
+  netclient, gpu_demo и xbps-install не переживали смерть шины в
+  каскадном демо. Укреплены ретраями: коннект к шине, полная HTTP-сессия
+  с новым lane'ом, poll-потолок 5с на каждый net_rpc (висение oneshot'а
+  на потерянном ответе теперь невозможно), xbps-install до 3 попыток;
+- гейты: test-acpi.sh — **ACPI GATES OK (q35 -smp 4: MADT 4 CPUs +
+  IRQ routing + chain M16)** + **POWEROFF OK (S5)** + **REBOOT OK**;
+  регрессии зелёные: run-qemu.sh (BOOT + SMP OK), test-realhw.sh
+  (**REALHW GATES OK**, 7 гейтов), test-persist.sh (**PERSIST GATES
+  OK**). Логи: docs/boot-m17-acpi-q35-smp4.log,
+  docs/boot-m17-poweroff.log, docs/boot-m17-reboot.log;
+- осталось из «современного x86»: x2APIC — за IRQ_REMAP (drivers/iommu
+  вырезан), IOMMU/DMA-remap — отдельным этапом.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -538,6 +583,7 @@ config-флипа и швы, гейты в QEMU (-smp 4 + DHCP на e1000e)».
 | M14 | реальное железо + настоящий Void-репо | ✅ сделано |
 | M15 | DHCP, r8169/e1000e, USB-клавиатуры, switch_root | ✅ сделано |
 | M16 | современный x86: SMP, PCI_MSI, HIGH_RES_TIMERS | ✅ сделано |
+| M17 | ACPI: MADT, _PRT, S5 poweroff/reboot | ✅ сделано |
 
 ## Честные оговорки
 
