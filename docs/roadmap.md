@@ -584,6 +584,7 @@ poweroff/reboot».
 | M15 | DHCP, r8169/e1000e, USB-клавиатуры, switch_root | ✅ сделано |
 | M16 | современный x86: SMP, PCI_MSI, HIGH_RES_TIMERS | ✅ сделано |
 | M17 | ACPI: MADT, _PRT, S5 poweroff/reboot | ✅ сделано |
+| M18 | видимая система: fbcon + EFI-fb, psmouse, usb-storage | ✅ сделано |
 
 ## Честные оговорки
 
