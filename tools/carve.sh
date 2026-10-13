@@ -167,7 +167,8 @@ EOF
 # линкуется с i8253 PIT (clockevent_i8253_*) и CMOS RTC (mc146818_*).
 # M4: pci — шина для userspace-драйверов (uio_pci_generic); video —
 # screen_info_pci.o, на который ссылается vgaarb из drivers/pci.
-DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video net block ata scsi nvme input"
+# M17: acpi+pnp — MADT (SMP на современных машинах), _PRT, S5 poweroff.
+DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video net block ata scsi nvme input acpi pnp"
 step_drivers() {
     say "drivers: оставляю только: $DRIVERS_KEEP"
     for d in "$TREE"/drivers/*/; do
