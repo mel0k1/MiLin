@@ -1,0 +1,6 @@
+# getty: подсказка входа на консоли; сессия = fork -> /sbin/login (M19)
+name=getty
+exec=/sbin/getty
+type=service
+stop=term
+order=100

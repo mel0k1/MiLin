@@ -34,7 +34,7 @@
 #define SVC_ONESHOT 1
 #define SVC_STOP_TERM   0
 #define SVC_STOP_UMOUNT 1
-#define SVC_MAX 12
+#define SVC_MAX 16
 
 struct svc {
     char name[16];
@@ -52,6 +52,11 @@ struct svc {
 
 static struct svc svcs[SVC_MAX];
 static int nsvcs;
+
+// M19: установленная система (нет /init) не завершается после oneshot'ов;
+// install=<диск> в cmdline запускает инсталлятор oneshot'ом
+static int g_installed;
+static char install_dev[64];
 
 static int died_by_signal(int status) { return (status & 0x7f) != 0; }
 static int exit_code(int status) { return (status >> 8) & 0xff; }
@@ -206,6 +211,16 @@ static int spawn(const char *path, const char *name) {
 static int spawn_svc(struct svc *s) {
     s->pid = spawn(s->exec, s->name);
     return s->pid;
+}
+
+static int spawn_arg(const char *path, const char *name, const char *arg) {
+    int pid = sys3(SYS_fork, 0, 0, 0);
+    if (pid == 0) {
+        char *argv[] = { (char *)name, (char *)arg, 0 };
+        if (sys3(SYS_execve, (long)path, (long)argv, 0) != 0)
+            sys3(SYS_exit, 127, 0, 0);
+    }
+    return pid;
 }
 
 static int svc_alive_count(void) {
@@ -667,6 +682,26 @@ static void cmdline_root(char *out, int max) {
     }
 }
 
+static void cmdline_install(char *out, int max) {
+    long fd = sys3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
+    if (fd < 0) return;
+    char b[512];
+    long n = sys3(SYS_read, fd, (long)b, sizeof(b) - 1);
+    sys3(SYS_close, fd, 0, 0);
+    if (n <= 0) return;
+    b[n] = 0;
+    for (long i = 0; i < n; i++) {
+        if (b[i] != 'i') continue;
+        if (m_strncmp(b + i, "install=", 8) != 0) continue;
+        long j = i + 8;
+        int k = 0;
+        while (j < n && b[j] != ' ' && b[j] != '\n' && k < max - 1)
+            out[k++] = b[j++];
+        out[k] = 0;
+        return;
+    }
+}
+
 static void do_switch_root(void) {
     sys3(SYS_mkdir, (long)"/newroot/dev", 0755, 0);
     sys3(SYS_mkdir, (long)"/newroot/sys", 0755, 0);
@@ -721,6 +756,22 @@ static void try_switch_root(void) {
 
 void milin_main(void) {
     P("MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)\n");
+
+    // /init есть только в initramfs; маркер /etc/milin/.installed ставит
+    // minstall — установленная система не завершается после oneshot'ов
+    g_installed = 0;
+    {
+        long f = sys3(SYS_open, (long)"/init", O_RDONLY, 0);
+        if (f < 0) {
+            long m = sys3(SYS_open, (long)"/etc/milin/.installed", O_RDONLY, 0);
+            if (m >= 0) {
+                g_installed = 1;
+                sys3(SYS_close, m, 0, 0);
+            }
+        } else {
+            sys3(SYS_close, f, 0, 0);
+        }
+    }
 
     // devtmpfs: /dev/fuse и /dev/uio0 появляются сами (UIO берёт
     // динамический major, узнаваемый только через devtmpfs)
@@ -785,14 +836,21 @@ void milin_main(void) {
     // (не возвращается при успехе; без root= или с плохим диском — дальше)
     try_switch_root();
 
+    cmdline_install(install_dev, sizeof(install_dev));
+
     // --- сервисы: из манифестов, в порядке order ---
     load_manifests();
     sort_svcs();
     P("supervisor: манифестов: ");
     print_dec_n(nsvcs);
     P("\n");
+    // install= : сессия установки — сервисы + инсталлятор, без демо-oneshot'ов
     for (int i = 0; i < nsvcs; i++) {
         struct svc *s = &svcs[i];
+        if (install_dev[0] && s->type == SVC_ONESHOT) {
+            s->done = 1;
+            continue;
+        }
         spawn_svc(s);
         P("supervisor: старт ");
         print_str(s->name);
@@ -801,6 +859,17 @@ void milin_main(void) {
         P("): ");
         print_str(s->type == SVC_ONESHOT ? "oneshot" : "service");
         P("\n");
+    }
+    if (install_dev[0] && nsvcs < SVC_MAX) {
+        struct svc *s = &svcs[nsvcs++];
+        copy_field(s->name, "minstall", sizeof(s->name));
+        copy_field(s->exec, "/sbin/minstall", sizeof(s->exec));
+        s->type = SVC_ONESHOT;
+        s->order = 98;
+        s->pid = spawn_arg("/sbin/minstall", "minstall", install_dev);
+        P("supervisor: minstall ");
+        print_str(install_dev);
+        P(" — установка\n");
     }
     struct svc *client = find_oneshot();
 
@@ -835,9 +904,13 @@ void milin_main(void) {
             // запланированная остановка — норма graceful shutdown
             s->stopped = 1;
         } else if (s->type == SVC_ONESHOT) {
-            // oneshot закончил работу; сессия живёт, пока не завершатся ВСЕ
-            // (демо-клиенты M5.2/M12 идут отдельными oneshot'ами)
-            if (all_oneshots_done()) break;
+            // oneshot закончил работу; в initramfs-сессии система завершается,
+            // когда завершатся ВСЕ (демо-клиенты M5.2/M12 — отдельные oneshot'ы);
+            // установленная система живёт дальше (getty держит вход, M19)
+            if (all_oneshots_done()) {
+                if (!g_installed) break;
+                continue;
+            }
         } else {
             // нежданная смерть сервиса: перезапуск с нарастающей паузой
             if (s->restarts >= MAX_RESTARTS) {

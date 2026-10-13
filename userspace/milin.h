@@ -70,6 +70,12 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_mknod     133
 #define SYS_mount     165
 #define SYS_umount2   166
+#define SYS_ioctl     16
+#define SYS_dup2      33
+#define SYS_umask     95
+#define SYS_setgid    106
+#define SYS_setsid    112
+#define SYS_fsync     74
 
 #define MS_MOVE (1 << 13)
 
@@ -181,9 +187,16 @@ static void sleep_ms(long ms) {
 // Точка входа: ядро передаёт управление с rsp, выровненным на 16, и БЕЗ
 // return address, а ABI gcc ожидает rsp%16==8 (адрес возврата в стеке).
 // Без этого trampлина любая movaps в теле ловит general protection fault.
+// argc/argv снимаются со стека ДО выравнивания (M19: login читает argv[1]).
 void milin_main(void) __attribute__((noreturn));
+static int milin_argc __attribute__((used));
+static char **milin_argv __attribute__((used));
 __attribute__((naked, noreturn)) void _start(void) {
     __asm__ volatile (
+        "mov (%rsp), %rax\n"
+        "lea 8(%rsp), %rdx\n"
+        "mov %rax, milin_argc(%rip)\n"
+        "mov %rdx, milin_argv(%rip)\n"
         "and $-16, %rsp\n"
         "call milin_main\n"
         "hlt\n");
