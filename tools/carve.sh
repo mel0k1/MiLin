@@ -101,6 +101,18 @@ patch('init/main.c',
       '\t\t       PTR_ERR(file));\n'
       '\t\treturn;\n'
       '\t}')
+
+patch('init/do_mounts.c',
+      '\tif (err < 0)\n'
+      '\t\tpr_emerg("Failed to create /dev/root: %d\\n", err);\n'
+      '\tmount_root_generic("/dev/root", root_device_name, root_mountflags);',
+      '\tif (err < 0)\n'
+      '\t\tpr_emerg("Failed to create /dev/root: %d\\n", err);\n'
+      '\t/* MiLin: usr/ (built-in initramfs) is carved away, so the default\n'
+      '\t * cpio that used to create the mount target is gone; create it\n'
+      '\t * ourselves for the initramfs-less direct root mount */\n'
+      '\tinit_mkdir("/root", 0700);\n'
+      '\tmount_root_generic("/dev/root", root_device_name, root_mountflags);')
 PYEOF
     # меню декомпрессоров внешнего initrd: из usr/Kconfig в init/Kconfig
     python3 - "$TREE" <<'PYEOF'
