@@ -659,7 +659,9 @@ static void seed_root(void) {
 }
 
 static void cmdline_root(char *out, int max) {
-    // /proc/cmdline: "root=/dev/vda1 console=..."
+    // /proc/cmdline: "root=/dev/vda1 console=..."; последний root=
+    // выигрывает — та же семантика, что и у ядра (bootloader-приложение
+    // перекрывает встроенный cmdline)
     sys3(SYS_mkdir, (long)"/proc", 0555, 0);
     if (sys5(SYS_mount, (long)"proc", (long)"/proc", (long)"proc", 0, 0) != 0)
         return;
@@ -678,7 +680,6 @@ static void cmdline_root(char *out, int max) {
         while (j < n && b[j] != ' ' && b[j] != '\n' && k < max - 1)
             out[k++] = b[j++];
         out[k] = 0;
-        return;
     }
 }
 
