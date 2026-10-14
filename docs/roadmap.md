@@ -669,6 +669,35 @@ passwd.
 - осталось: utmp/wtmp, resize2fs на p2 для крупного мира, пользоватские
   PARTUUID (одна каноническая GUID на все установки).
 
+### M21 — utmp/wtmp + resize2fs
+
+Хвосты M20. Одобрено: «да, давай utmp/wtmp и resize2fs».
+
+- utmp/wtmp: формат — glibc struct utmp x86_64 (384 байта, compat32:
+  ut_session/ut_tv 32-битные), общий userspace/utmp.h для записи. login
+  пишет USER_PROCESS, getty после смерти сессии (wait4) — DEAD_PROCESS;
+  /var/run/utmp — слотовая база (запись той же линии заменяется на месте,
+  до 16 слотов), /var/log/wtmp — только аппенд. Читалка /sbin/last печатает
+  историю и маркер M21 WTMP OK n=<число входов>;
+- два бага, найденных гейтом: (1) login писал utmp после setuid — записи
+  user падали с EACCES на root-owned файлах; перенос до setgid/setuid —
+  utmp пишет root, как и настоящий login(1); (2) poweroff/reboot уходили
+  в sys_reboot без sync — хвост page cache терялся при S5 (на диске:
+  размер файла закоммичен, данные — нули; записи прошлого бута пропали).
+  Фикс — sync в poweroff.c + fsync на каждую запись utmp/wtmp;
+- resize2fs: minstall делает mkfs.ext4 128M (мир 71M), копит мир и
+  бут-пейлоад, umount — и resize2fs до края партиции: на больших дисках
+  быстрый mkfs малого fs + resize выигрывает у полного mkfs; fs
+  растягивается на весь p2 (RESIZE OK). Классический паттерн
+  инсталляторов;
+- гейт: INSTALL GATES OK — бут A получил чек RESIZE OK, бут B2 — чтение
+  wtmp через /sbin/last (USER_PROCESS/DEAD_PROCESS обеих сессий: root и
+  user). Проверка вскрытием образа: 15/15 записей ненулевые, история
+  бутов B -> B2 -> C полная, utmp-слот корректен. Логи:
+  docs/boot-m21-install.log, docs/boot-m21-last.log;
+- осталось: пользоватские PARTUUID (одна каноническая GUID на все
+  установки), mlkd-фасад amdgpu e2e, fast/bulk split IPC.
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -696,6 +725,7 @@ passwd.
 | M18 | видимая система: fbcon + EFI-fb, psmouse, usb-storage | ✅ сделано |
 | M19 | MiLini как устанавливаемая ОС: инсталлятор, getty/login | ✅ сделано |
 | M20 | таблица партиций (рескан) + UEFI-бут + passwd в госте | ✅ сделано |
+| M21 | utmp/wtmp + resize2fs | ✅ сделано |
 
 ## Честные оговорки
 
