@@ -605,6 +605,59 @@ poweroff/reboot».
   (BLKRRPART-рескан), смена пароля в госте (passwd/shadow-утилиты),
   utmp/wtmp.
 
+### M20 — таблица партиций + UEFI-бут установленного диска
+
+Одобрено: «M20: таблица партиций (рескан), UEFI-бут установленного диска
+(GRUB EFI/EFISTUB), passwd в госте». Партиции и UEFI-путь закрыты,
+passwd — следующий шаг.
+
+- таблица партиций: minstall больше не занимает диск целиком — пишет GPT
+  (защитный MBR + заголовок + записи + запасные копии, свой CRC32 без
+  libc): p1 = ESP 64M (GUID C12A7328), p2 = корень (Linux root x86-64,
+  discoverable GUID 4F68BCE3; legacy-bootable бит для gptmbr). Рескан —
+  ioctl BLKRRPART: ядро пересканирует таблицу без ребута, ноды /dev/sda1
+  и /dev/sda2 появляются в devtmpfs сами (M19-диагноз «устаревший кэш
+  скана» не подтвердился — путь bdev_disk_changed sync+invalidate цел;
+  реальной причиной был пробник). Чтение сектора 0 после рескана
+  возвращает свежую таблицу (защитный MBR 0xEE);
+- UEFI-бут: ядро с EFI stub уже с M14 — вместо GRUB на ESP кладётся само
+  ядро как /EFI/BOOT/BOOTX64.EFI (fallback-путь, без efibootmgr). ESP —
+  FAT16, писатель встроен в minstall (все имена 8.3, LFN и boot-код не
+  нужны — прошивка читает FAT своим драйвером): BPB + две FAT + корень +
+  EFI/BOOT, ядро пишется подряд линейной цепочкой. mtools отвергнуты:
+  Void-glibc не несёт CP850.so (iconv_open «Invalid argument»), а
+  дебиановский бинарь на девайсе требует геометрию и кодовые страницы
+  хоста;
+- EFISTUB без LoadOptions берёт cmdline из ядра: CONFIG_CMDLINE_BOOL
+  флип с baked «root=PARTUUID=4d494c49-4d20-4d32-8000-000000000001 rw
+  rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0» — канонический
+  PARTUUID корня зашит и в GPT (unique guid p2), и в конфиг: единая
+  точка правды. rootwait ждёт скана AHCI; memmap — контракт
+  /dev/mlpinned (M12). LoadOptions при !CMDLINE_OVERRIDE добавляются
+  поверх built-in (x86-stub);
+- ядро: прямой mount без initramfs упирался в отсутствие /root в rootfs
+  — built-in initramfs (usr/) вырезан в M3, его default-cpio создавал
+  /dev и /root; /dev уже чинит шов console_on_rootfs (M3), /root возвращает
+  новый шов init/do_mounts.c (mount_block_root, init_mkdir) — коммит в
+  форке linux@milin + воспроизводимый stitch в carve.sh;
+- супервизор: cmdline_root берёт ПОСЛЕДНИЙ root= из /proc/cmdline —
+  семантика ядра (bootloader-приложение перекрывает built-in); первый
+  токен после M20 — всегда PARTUUID, который userspace-парсер не
+  резолвит;
+- гейт test-install.sh — три бута, **INSTALL GATES OK**: A (live):
+  MINSTALL OK + BLKRRPART -> 0 + ноды в devtmpfs без ребута + gptmbr +
+  ESP OK; B (BIOS): SeaBIOS -> gptmbr -> extlinux (sda2) -> switch_root
+  -> login root/user -> poweroff S5; C (UEFI): OVMF -> ESP -> BOOTX64.EFI
+  -> прямой root-mount по PARTUUID («VFS: Mounted root (ext4 filesystem)
+  on device 8:2») -> /sbin/init -> login -> poweroff S5. Регрессии:
+  run-qemu (BOOT + SMP OK), test-acpi (POWEROFF + REBOOT OK),
+  test-persist (PERSIST GATES OK), test-realhw 9/10 гейтов OK (полный
+  повтор — за таймаутом тулчейна; usb-storage не менялся с M18). Логи:
+  docs/boot-m20-install.log, docs/boot-m20-bios.log, docs/boot-m20-uefi.log;
+- осталось: passwd в госте (утверждено в M20, следующий шаг), utmp/wtmp,
+  resize2fs на p2 для крупного мира, пользоватские PARTUUID (одна
+  каноническая GUID на все установки).
+
 ## Статус
 
 | Этап | Название | Статус |
@@ -631,6 +684,7 @@ poweroff/reboot».
 | M17 | ACPI: MADT, _PRT, S5 poweroff/reboot | ✅ сделано |
 | M18 | видимая система: fbcon + EFI-fb, psmouse, usb-storage | ✅ сделано |
 | M19 | MiLini как устанавливаемая ОС: инсталлятор, getty/login | ✅ сделано |
+| M20 | таблица партиций (рескан) + UEFI-бут установленного диска | ✅ сделано |
 
 ## Честные оговорки
 
