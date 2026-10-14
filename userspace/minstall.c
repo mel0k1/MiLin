@@ -1,5 +1,6 @@
 // /sbin/minstall <диск> (M20): GPT (ESP + корень) -> BLKRRPART-рескан без
-// ребута -> mkfs.ext4 на p2 -> мир -> extlinux --install + gptmbr.bin (BIOS)
+// ребута -> mkfs.ext4 128M на p2 -> мир -> resize2fs до края партиции ->
+// extlinux --install + gptmbr.bin (BIOS)
 // -> ESP mformat/mcopy (UEFI: прошивка грузит /EFI/BOOT/BOOTX64.EFI — ядро
 // с EFI stub). Канонический PARTUUID корня зашит здесь и в CONFIG_CMDLINE
 // (EFISTUB без LoadOptions берёт cmdline из ядра).
@@ -518,12 +519,14 @@ void milin_main(void) {
         P("\n");
     }
 
-    char *mkav[6] = { (char *)"mkfs.ext4", (char *)"-F", (char *)"-O",
-                      (char *)"^64bit,^metadata_csum", p2, 0 };
+    char *mkav[9] = { (char *)"mkfs.ext4", (char *)"-F", (char *)"-O",
+                      (char *)"^64bit,^metadata_csum", (char *)"-b",
+                      (char *)"4096", p2, (char *)"32768", 0 };
     if (!fork_check("/usr/bin/mkfs.ext4", mkav)) {
         P("minstall: mkfs.ext4: FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
     }
+    P("minstall: mkfs.ext4 128M OK (мир 71M, resize2fs в конце)\n");
 
     sys3(SYS_mkdir, (long)"/mst", 0755, 0);
     if (sys5(SYS_mount, (long)p2, (long)"/mst", (long)"ext4", 0, 0) != 0) {
@@ -655,6 +658,16 @@ void milin_main(void) {
     }
 
     sys5(SYS_umount2, (long)"/mst", 0, 0, 0, 0);
+
+    // ext4 вырастает до края партиции: на больших дисках mkfs маленького
+    // fs + resize быстрее полного mkfs, файловая система целая после umount
+    char *rav[3] = { (char *)"resize2fs", p2, 0 };
+    if (!fork_check("/usr/bin/resize2fs", rav)) {
+        P("minstall: resize2fs: FAIL\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
+    P("minstall: RESIZE OK — ext4 на весь p2\n");
+
     P("MINSTALL OK ");
     print_str(dev);
     P("\n");
