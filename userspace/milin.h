@@ -65,6 +65,9 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_chdir     80
 #define SYS_symlink   88
 #define SYS_readlink  89
+#define SYS_rename    82
+#define SYS_unlink    87
+#define SYS_fchmod    91
 #define SYS_chown     92
 #define SYS_chroot    161
 #define SYS_mknod     133
