@@ -4,6 +4,7 @@
 
 #include "milin.h"
 #include "crypt.h"
+#include "utmp.h"
 
 #define TCGETS 0x5401
 #define TCSETS 0x5402
@@ -174,6 +175,10 @@ void milin_main(void) {
     }
     P("\n");
     if (pn < 0 || !sha512_verify(pw, salt, enc)) fail();
+
+    // utmp/wtmp пишет root ДО setuid: после смены uid запись в root-owned
+    // /var/run/utmp и /var/log/wtmp не пройдёт
+    utmp_write(UTMP_USER, (int)sys3(SYS_getpid, 0, 0, 0), "console", user);
 
     sys3(SYS_setgid, gid, 0, 0);
     sys3(SYS_setuid, uid, 0, 0);

@@ -3,6 +3,7 @@
 // умерший getty супервизор перезапускает сам (M7 backoff).
 
 #include "milin.h"
+#include "utmp.h"
 
 #define TIOCSCTTY 0x540E
 
@@ -49,5 +50,6 @@ void milin_main(void) {
         }
         int status = 0;
         sys5(SYS_wait4, pid, (long)&status, 0, 0, 0);
+        utmp_write(UTMP_DEAD, pid, "console", "");
     }
 }

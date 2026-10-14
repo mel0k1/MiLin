@@ -59,6 +59,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_exit      60
 #define SYS_wait4     61
 #define SYS_kill      62
+#define SYS_getpid    39
 #define SYS_getuid    102
 #define SYS_setuid    105
 #define SYS_mkdir     83
@@ -76,6 +77,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_ioctl     16
 #define SYS_dup2      33
 #define SYS_umask     95
+#define SYS_gettimeofday 96
 #define SYS_setgid    106
 #define SYS_setsid    112
 #define SYS_fsync     74
@@ -87,6 +89,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define O_RDWR     2
 #define O_CREAT    0100
 #define O_TRUNC    01000
+#define O_APPEND   02000
 #define O_DIRECTORY 0200000
 #define PROT_READ  1
 #define PROT_WRITE 2
@@ -102,6 +105,11 @@ struct ldirent64 {
     u16 d_reclen;
     u8 d_type;
     char d_name[];
+};
+
+// gettimeofday/gettimespec-стиль: long-поля, усечение до 32-бит — в utmp.h
+struct timeval_k {
+    long sec, usec;
 };
 
 // --- мини-строки/память: builtins при переменной длине зовут libc ---
