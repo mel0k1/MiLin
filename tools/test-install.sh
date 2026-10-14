@@ -71,6 +71,7 @@ chk_a "BLKRRPART -> 0" "BLKRRPART-рескан принял новую табл�
 chk_a "в devtmpfs (рескан без ребута)" "ноды sda1/sda2 в devtmpfs без ребута"
 chk_a "BIOS-загрузчик gptmbr OK" "BIOS-путь: gptmbr.bin на LBA0"
 chk_a "ESP OK — BOOTX64.EFI" "UEFI-путь: ESP FAT16 с BOOTX64.EFI"
+chk_a "RESIZE OK" "resize2fs вырастил ext4 до края p2"
 
 echo "== бут B: загрузка с диска (SeaBIOS/gptmbr/extlinux), getty + login"
 ( sleep 25; printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
@@ -111,7 +112,8 @@ echo "== бут B2: passwd в госте (root-смена + self-смена че
   printf 'passwd\n'; sleep 2; printf 'newpass\n'; sleep 2; printf 'pass1234\n'; sleep 2; printf 'pass1234\n'; sleep 6;
   printf 'echo M20 PASSWD SELF OK\n'; sleep 2; printf 'exit\n'; sleep 5;
   printf 'user\n'; sleep 2; printf 'pass1234\n'; sleep 4;
-  printf 'echo M20 PASSWD LOGIN2 OK\n'; sleep 2; printf 'exit\n'; sleep 5;
+  printf 'echo M20 PASSWD LOGIN2 OK\n'; sleep 2;
+  printf '/sbin/last\n'; sleep 5; printf 'exit\n'; sleep 5;
   printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
   printf '/sbin/poweroff\n' ) \
 | timeout 240 "$BIN" -m 512M $EXTRA -nographic -no-reboot \
@@ -140,6 +142,9 @@ fi
 chk_p "M20 PASSWD LOGIN1 OK" "вход user с паролем от root-смены OK"
 chk_p "M20 PASSWD SELF OK" "self-смена с подтверждением текущего OK"
 chk_p "M20 PASSWD LOGIN2 OK" "вход user с паролем после self-смены OK"
+chk_p "M21 WTMP OK" "last: wtmp читается, USER_PROCESS есть"
+chk_p "7 user console" "USER_PROCESS записи от login в wtmp"
+chk_p "8 - console" "DEAD_PROCESS записи от getty в wtmp"
 chk_p "reboot: Power down" "poweroff S5 OK"
 
 if [ -n "$OVMF_CODE" ]; then

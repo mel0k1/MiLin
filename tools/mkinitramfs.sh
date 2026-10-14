@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")/.."
 R=build/rootfs
-mkdir -p $R/sbin $R/dev $R/mnt $R/etc/milin $R/tmp $R/root
+mkdir -p $R/sbin $R/dev $R/mnt $R/etc/milin $R/tmp $R/root $R/var/log $R/var/run
 # -ffreestanding: не только -fno-builtin, но и запрет превращать наши
 # циклы в вызовы memset/strlen (M5.1: m_memset(нулями 4096) -> memset)
 gcc -static -nostdlib -ffreestanding -O2 -o $R/init userspace/supervisor.c
@@ -43,6 +43,8 @@ gcc -static -nostdlib -ffreestanding -O2 -DML_REBOOT=1 -o $R/sbin/reboot userspa
 # M20: passwd — setuid root (bprm_fill_uid жив в форке), пишет shadow под uid 1000
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/passwd userspace/passwd.c
 chmod 4755 $R/sbin/passwd
+# M21: last — чтение wtmp (utmp/wtmp пишут login/getty через userspace/utmp.h)
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/last userspace/last.c
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh
