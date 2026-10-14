@@ -40,6 +40,9 @@ gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/login userspace/login.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/minstall userspace/minstall.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/poweroff userspace/poweroff.c
 gcc -static -nostdlib -ffreestanding -O2 -DML_REBOOT=1 -o $R/sbin/reboot userspace/poweroff.c
+# M20: passwd — setuid root (bprm_fill_uid жив в форке), пишет shadow под uid 1000
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/passwd userspace/passwd.c
+chmod 4755 $R/sbin/passwd
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh

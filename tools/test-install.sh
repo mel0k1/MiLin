@@ -8,6 +8,9 @@
 # бут B (BIOS): SeaBIOS -> gptmbr -> extlinux (sda2) -> ядро + мини-initramfs
 #   -> switch_root -> login root/milin (sha512-crypt) -> root shell ->
 #   login user/user (setuid 1000) -> user shell -> poweroff (S5);
+# бут B2 (BIOS): passwd в госте — root меняет user без текущего пароля,
+#   вход user с новым паролем, self-смена через setuid (текущий -> новый x2),
+#   вход с паролем после self-смены -> poweroff (S5);
 # бут C (UEFI): OVMF -> прошивка читает ESP -> BOOTX64.EFI (EFI stub без
 #   LoadOptions) -> built-in cmdline (root=PARTUUID корня) -> прямой
 #   mount ext4 без initramfs -> /sbin/init -> login -> poweroff (S5).
@@ -98,6 +101,46 @@ chk_b "M19 SHELL OK" "root shell OK"
 chk_b "M19 LOGIN OK user=user" "login user (setuid 1000) OK"
 chk_b "M19 USER OK" "user shell OK"
 chk_b "reboot: Power down" "poweroff S5 OK"
+
+echo "== бут B2: passwd в госте (root-смена + self-смена через setuid)"
+( sleep 22; printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
+  printf 'passwd user\n'; sleep 2; printf 'newpass\n'; sleep 2; printf 'newpass\n'; sleep 5;
+  printf 'exit\n'; sleep 5;
+  printf 'user\n'; sleep 2; printf 'newpass\n'; sleep 4;
+  printf 'echo M20 PASSWD LOGIN1 OK\n'; sleep 2;
+  printf 'passwd\n'; sleep 2; printf 'newpass\n'; sleep 2; printf 'pass1234\n'; sleep 2; printf 'pass1234\n'; sleep 6;
+  printf 'echo M20 PASSWD SELF OK\n'; sleep 2; printf 'exit\n'; sleep 5;
+  printf 'user\n'; sleep 2; printf 'pass1234\n'; sleep 4;
+  printf 'echo M20 PASSWD LOGIN2 OK\n'; sleep 2; printf 'exit\n'; sleep 5;
+  printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
+  printf '/sbin/poweroff\n' ) \
+| timeout 240 "$BIN" -m 512M $EXTRA -nographic -no-reboot \
+    -machine q35 -smp 4 \
+    -device virtio-rng-pci \
+    -device ich9-ahci,id=ahci \
+    -drive id=d0,if=none,format=raw,file="$DISK" \
+    -device ide-hd,drive=d0,bus=ahci.0,bootindex=0 \
+    > build/install-pw.log || true
+LP="$(tr -d '\000' < build/install-pw.log)"
+chk_p() {
+    if echo "$LP" | grep -q "$1"; then
+        echo "   бут B2: $2"
+    else
+        echo "   бут B2 FAIL: нет '$1'"
+        FAIL=1
+    fi
+}
+NP="$(echo "$LP" | grep -c 'M20 PASSWD OK user=user' || true)"
+if [ "$NP" -ge 2 ]; then
+    echo "   бут B2: passwd root+self ($NP смены)"
+else
+    echo "   бут B2 FAIL: passwd-маркеров $NP/2"
+    FAIL=1
+fi
+chk_p "M20 PASSWD LOGIN1 OK" "вход user с паролем от root-смены OK"
+chk_p "M20 PASSWD SELF OK" "self-смена с подтверждением текущего OK"
+chk_p "M20 PASSWD LOGIN2 OK" "вход user с паролем после self-смены OK"
+chk_p "reboot: Power down" "poweroff S5 OK"
 
 if [ -n "$OVMF_CODE" ]; then
     echo "== бут C: UEFI-загрузка установленного диска (OVMF -> ESP -> EFI stub)"
