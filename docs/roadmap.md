@@ -605,11 +605,11 @@ poweroff/reboot».
   (BLKRRPART-рескан), смена пароля в госте (passwd/shadow-утилиты),
   utmp/wtmp.
 
-### M20 — таблица партиций + UEFI-бут установленного диска
+### M20 — таблица партиций + UEFI-бут установленного диска + passwd
 
 Одобрено: «M20: таблица партиций (рескан), UEFI-бут установленного диска
-(GRUB EFI/EFISTUB), passwd в госте». Партиции и UEFI-путь закрыты,
-passwd — следующий шаг.
+(GRUB EFI/EFISTUB), passwd в госте». Закрыто целиком: партиции, UEFI-путь,
+passwd.
 
 - таблица партиций: minstall больше не занимает диск целиком — пишет GPT
   (защитный MBR + заголовок + записи + запасные копии, свой CRC32 без
@@ -644,19 +644,30 @@ passwd — следующий шаг.
   семантика ядра (bootloader-приложение перекрывает built-in); первый
   токен после M20 — всегда PARTUUID, который userspace-парсер не
   резолвит;
-- гейт test-install.sh — три бута, **INSTALL GATES OK**: A (live):
+- passwd в госте: /sbin/passwd (setuid root — bprm_fill_uid жив в форке)
+  меняет пароль в /etc/shadow: root — любой аккаунт без текущего пароля,
+  остальные — свой, подтверждая текущий (sha512_verify из crypt.h, механика
+  login с M19). Соль — 16 символов из /dev/urandom (ноду регистрирует
+  mem.c, devtmpfs создаёт сам). Запись атомарная: shadow.tmp -> fsync ->
+  fchmod 0600 -> rename; при любом сбое tmp снимается — shadow либо
+  старый, либо полный новый. Хеш-поле «$6$salt$hash86» совместимо с
+  openssl passwd -6 (вектор проверки — вход по новому паролю в гейте);
+- гейт test-install.sh — четыре бута, **INSTALL GATES OK**: A (live):
   MINSTALL OK + BLKRRPART -> 0 + ноды в devtmpfs без ребута + gptmbr +
   ESP OK; B (BIOS): SeaBIOS -> gptmbr -> extlinux (sda2) -> switch_root
-  -> login root/user -> poweroff S5; C (UEFI): OVMF -> ESP -> BOOTX64.EFI
+  -> login root/user -> poweroff S5; B2 (BIOS): passwd в госте — root
+  меняет user без текущего пароля, вход user с новым паролем, self-смена
+  через setuid с подтверждением текущего, вход с паролем после self-смены
+  -> poweroff S5; C (UEFI): OVMF -> ESP -> BOOTX64.EFI
   -> прямой root-mount по PARTUUID («VFS: Mounted root (ext4 filesystem)
   on device 8:2») -> /sbin/init -> login -> poweroff S5. Регрессии:
   run-qemu (BOOT + SMP OK), test-acpi (POWEROFF + REBOOT OK),
   test-persist (PERSIST GATES OK), test-realhw 9/10 гейтов OK (полный
   повтор — за таймаутом тулчейна; usb-storage не менялся с M18). Логи:
-  docs/boot-m20-install.log, docs/boot-m20-bios.log, docs/boot-m20-uefi.log;
-- осталось: passwd в госте (утверждено в M20, следующий шаг), utmp/wtmp,
-  resize2fs на p2 для крупного мира, пользоватские PARTUUID (одна
-  каноническая GUID на все установки).
+  docs/boot-m20-install.log, docs/boot-m20-bios.log, docs/boot-m20-passwd.log,
+  docs/boot-m20-uefi.log;
+- осталось: utmp/wtmp, resize2fs на p2 для крупного мира, пользоватские
+  PARTUUID (одна каноническая GUID на все установки).
 
 ## Статус
 
@@ -684,7 +695,7 @@ passwd — следующий шаг.
 | M17 | ACPI: MADT, _PRT, S5 poweroff/reboot | ✅ сделано |
 | M18 | видимая система: fbcon + EFI-fb, psmouse, usb-storage | ✅ сделано |
 | M19 | MiLini как устанавливаемая ОС: инсталлятор, getty/login | ✅ сделано |
-| M20 | таблица партиций (рескан) + UEFI-бут установленного диска | ✅ сделано |
+| M20 | таблица партиций (рескан) + UEFI-бут + passwd в госте | ✅ сделано |
 
 ## Честные оговорки
 
