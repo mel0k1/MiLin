@@ -985,6 +985,72 @@ static struct nic_ops r8169_ops = {
     "r8169", r8169_txf, r8169_txc, r8169_poll, r8169_init
 };
 
+#define MLTPIO_BIND 0x40106D10L
+#define MLTPIO_UP   0x00006D11L
+#define MLTPIO_MAC  0x80066D12L
+#define O_ML_NONBLOCK 04000
+
+static long mltap_fd = -1;
+static u8 mltap_txb[2048];
+static u8 mltap_rxb[2048];
+
+static int mltap_init(long _uio) {
+    mltap_fd = sys3(SYS_open, (long)"/dev/mltap", O_RDWR | O_ML_NONBLOCK, 0);
+    if (mltap_fd < 0) {
+        P("netd: /dev/mltap нет\n");
+        return -1;
+    }
+    static const char *cand[] = { "wlan0", "wlan1", "eth0", "eth1", 0 };
+    static char ib[16];
+    int ok = -1;
+    for (int k = 0; cand[k]; k++) {
+        m_memset(ib, 0, sizeof(ib));
+        for (int i = 0; cand[k][i] && i < 15; i++) ib[i] = cand[k][i];
+        if (sys3(SYS_ioctl, mltap_fd, MLTPIO_BIND, (long)ib) == 0) { ok = k; break; }
+    }
+    if (ok < 0) {
+        P("netd: mltap: netdev не найден\n");
+        return -1;
+    }
+    if (sys3(SYS_ioctl, mltap_fd, MLTPIO_UP, 0) != 0) {
+        P("netd: mltap: IFF_UP FAIL\n");
+        return -1;
+    }
+    if (sys3(SYS_ioctl, mltap_fd, MLTPIO_MAC, (long)mac) != 0) {
+        P("netd: mltap: MAC FAIL\n");
+        return -1;
+    }
+    char ms[18];
+    mac_str(mac, ms);
+    char b[48];
+    int bp = bput(b, 0, "netd: mltap ");
+    bp = bput(b, bp, cand[ok]);
+    bp = bput(b, bp, ", MAC ");
+    bp = bput(b, bp, ms);
+    b[bp++] = '\n';
+    sys3(SYS_write, 1, (long)b, bp);
+    return 0;
+}
+
+static u8 *mltap_txf(void) { return mltap_txb; }
+static int mltap_txc(u32 len) {
+    return sys3(SYS_write, mltap_fd, (long)mltap_txb, len) == (long)len ? 0 : -1;
+}
+static void mltap_poll(void) {
+    for (int n = 0; n < 8; n++) {
+        long len = sys3(SYS_read, mltap_fd, (long)mltap_rxb, 2048);
+        if (len <= 0) return;
+        if (len < ETH_HDR + 20) continue;
+        u16 et = rbe16(mltap_rxb + 12);
+        if (et == 0x0806) arp_input(mltap_rxb + ETH_HDR, (u32)len - ETH_HDR);
+        else if (et == 0x0800) ip_input(mltap_rxb, (u32)len);
+    }
+}
+
+static struct nic_ops mltap_ops = {
+    "mltap", mltap_txf, mltap_txc, mltap_poll, mltap_init
+};
+
 static u8 *tx_frame(void) { return nic->txf(); }
 static int nic_tx_commit(u32 len) { return nic->txc(len); }
 static void nic_poll(void) { nic->poll(); }
@@ -1081,8 +1147,9 @@ static int nic_probe(void) {
         sys3(SYS_close, fd, 0, 0);
     }
     if (found < 0) {
-        P("netd: /dev/uioN не найден (e1000/e1000e/r8169)\n");
-        return -1;
+        P("netd: /dev/uioN не найден (e1000/e1000e/r8169) — пробую mltap\n");
+        nic = &mltap_ops;
+        return mltap_init(0);
     }
     const char *cfg = "/sys/class/uio/uio /device/config";
     m_memcpy(path, cfg, 34);

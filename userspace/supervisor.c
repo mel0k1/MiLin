@@ -181,7 +181,33 @@ static int spawn(const char *path, const char *name) {
     return pid;
 }
 
+static int svc_disabled(const char *name) {
+    long fd = sys3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
+    if (fd < 0) return 0;
+    static char b[512];
+    long n = sys3(SYS_read, fd, (long)b, sizeof(b) - 1);
+    sys3(SYS_close, fd, 0, 0);
+    if (n <= 0) return 0;
+    b[n] = 0;
+    for (long i = 0; i + 3 < n; i++) {
+        if (m_strncmp(b + i, "no=", 3) != 0) continue;
+        if (i > 0 && b[i - 1] != ' ' && b[i - 1] != '\n') continue;
+        long j = i + 3;
+        int k = 0;
+        while (name[k] && b[j] == name[k]) { k++; j++; }
+        if (name[k] == 0 && (b[j] == ' ' || b[j] == '\n' || j == n)) return 1;
+    }
+    return 0;
+}
+
 static int spawn_svc(struct svc *s) {
+    if (svc_disabled(s->name)) {
+        P("supervisor: ");
+        print_str(s->name);
+        P(": выключен (no=)\n");
+        s->pid = -1;
+        return -1;
+    }
     s->pid = spawn(s->exec, s->name);
     return s->pid;
 }
