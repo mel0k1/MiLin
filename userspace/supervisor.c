@@ -3,6 +3,7 @@
 #include "milin.h"
 #include "ipc.h"
 #include "mlgpu.h"
+#include "utmp.h"
 
 #define SVC_SERVICE 0
 #define SVC_ONESHOT 1
@@ -646,6 +647,7 @@ static void try_switch_root(void) {
 
 void milin_main(void) {
     P("MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)\n");
+    utmp_write(UTMP_BOOT, (int)sys3(SYS_getpid, 0, 0, 0), "boot", "reboot");
 
     g_installed = 0;
     {

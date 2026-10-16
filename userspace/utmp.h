@@ -10,6 +10,7 @@
 #define UT_HOSTSIZE 256
 
 #define UTMP_EMPTY 0
+#define UTMP_BOOT  2
 #define UTMP_USER  7
 #define UTMP_DEAD  8
 
