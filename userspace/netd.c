@@ -58,6 +58,22 @@ static u8 addr_set;                        // адрес сконфигурир�
 #define F_RST  0x04
 #define F_ACK  0x10
 
+static int bput(char *o, int p, const char *s) {
+    while (*s) o[p++] = *s++;
+    return p;
+}
+
+static void mac_str(const u8 *m, char *o) {
+    static const char hx[] = "0123456789abcdef";
+    int p = 0;
+    for (int i = 0; i < 6; i++) {
+        if (i) o[p++] = ':';
+        o[p++] = hx[m[i] >> 4];
+        o[p++] = hx[m[i] & 15];
+    }
+    o[p] = 0;
+}
+
 struct tseg { u32 seq, len, flags, t0, tries, off; u8 sent; };
 
 struct sock {
@@ -798,12 +814,15 @@ static int e1000_init(long uiofd) {
     rx_cur = 0;
     ew(E_RCTL, 0x02 | 0x08 | 0x10 | 0x8000);           // EN|UPE|MPE|BAM
 
-    P("netd: e1000 через UIO, MAC ");
-    for (int i = 0; i < 6; i++) {
-        if (i) P(":");
-        print_hex_flat((u32)mac[i] << 24);
+    char ms[18];
+    mac_str(mac, ms);
+    {
+        char b[48];
+        int bp = bput(b, 0, "netd: e1000 через UIO, MAC ");
+        bp = bput(b, bp, ms);
+        b[bp++] = '\n';
+        sys3(SYS_write, 1, (long)b, bp);
     }
-    P("\n");
     return 0;
 }
 
@@ -944,12 +963,15 @@ static int r8169_init(long uiofd) {
     rw(R_RXCFG, (7u << 13) | (7u << 8) | (1u << 15) | 0x0F);
     rw(R_TXCFG, (7u << 8) | (0x03u << 24));
 
-    P("netd: r8169 через UIO, MAC ");
-    for (int i = 0; i < 6; i++) {
-        if (i) P(":");
-        print_hex_flat((u32)mac[i] << 24);
+    char ms[18];
+    mac_str(mac, ms);
+    {
+        char b[48];
+        int bp = bput(b, 0, "netd: r8169 через UIO, MAC ");
+        bp = bput(b, bp, ms);
+        b[bp++] = '\n';
+        sys3(SYS_write, 1, (long)b, bp);
     }
-    P("\n");
     return 0;
 }
 

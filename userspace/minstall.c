@@ -62,6 +62,11 @@ static int guid_parse(const char *s, u8 g[16]) {
     return 1;
 }
 
+static int ebput(char *o, int p, const char *s) {
+    while (*s) o[p++] = *s++;
+    return p;
+}
+
 static void guid_str(const u8 g[16], char *out) {
     int p = 0;
     for (int f = 0; f < 16; f++) {
@@ -592,12 +597,15 @@ void milin_main(void) {
         sys3(SYS_exit, 1, 0, 0);
     }
     if (ud || ue || ur) {
-        char gt[40];
-        P("minstall: заданы оператором:");
-        if (ud) { guid_str(g_disk, gt); P(" uuid_disk="); print_str(gt); }
-        if (ue) { guid_str(g_esp, gt); P(" uuid_esp="); print_str(gt); }
-        if (ur) { guid_str(g_root, gt); P(" uuid_root="); print_str(gt); }
-        P("\n");
+        char gt[40], eb[160];
+        int ep = 0;
+        const char *m = "minstall: заданы оператором:";
+        while (*m) eb[ep++] = *m++;
+        if (ud) { guid_str(g_disk, gt); ep = ebput(eb, ep, " uuid_disk="); ep = ebput(eb, ep, gt); }
+        if (ue) { guid_str(g_esp, gt); ep = ebput(eb, ep, " uuid_esp="); ep = ebput(eb, ep, gt); }
+        if (ur) { guid_str(g_root, gt); ep = ebput(eb, ep, " uuid_root="); ep = ebput(eb, ep, gt); }
+        eb[ep++] = '\n';
+        sys3(SYS_write, 1, (long)eb, ep);
     }
     P("minstall: GPT ");
     print_dec_n(nsect);
@@ -624,9 +632,16 @@ void milin_main(void) {
     }
     char gs[40];
     guid_str(g_root, gs);
-    P("minstall: PARTUUID ");
-    print_str(gs);
-    P("\n");
+    {
+        char eb[64];
+        int ep = 0;
+        const char *m = "minstall: PARTUUID ";
+        while (*m) eb[ep++] = *m++;
+        m_memcpy(eb + ep, gs, 36);
+        ep += 36;
+        eb[ep++] = '\n';
+        sys3(SYS_write, 1, (long)eb, ep);
+    }
 
     long rr = sys3(SYS_ioctl, fd, BLKRRPART, 0);
     P("minstall: BLKRRPART -> ");
@@ -824,12 +839,16 @@ void milin_main(void) {
 
     sys5(SYS_umount2, (long)"/mst", 0, 0, 0, 0);
 
-    char *rav[3] = { (char *)"resize2fs", p2, 0 };
-    if (!fork_check("/usr/bin/resize2fs", rav)) {
-        P("minstall: resize2fs: FAIL\n");
-        sys3(SYS_exit, 1, 0, 0);
+    if (sz > (u64)32768 * 4096) {
+        char *rav[4] = { (char *)"resize2fs", (char *)"-f", p2, 0 };
+        if (!fork_check("/usr/bin/resize2fs", rav)) {
+            P("minstall: resize2fs: FAIL (продолжаю — fs 128M)\n");
+        } else {
+            P("minstall: RESIZE OK — ext4 на весь p2\n");
+        }
+    } else {
+        P("minstall: RESIZE SKIP — p2 не больше 128M\n");
     }
-    P("minstall: RESIZE OK — ext4 на весь p2\n");
 
     P("MINSTALL OK ");
     print_str(dev);
