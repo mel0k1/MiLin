@@ -70,8 +70,21 @@ chk_a "MINSTALL OK /dev/sda" "MINSTALL OK (GPT: ESP + корень)"
 chk_a "BLKRRPART -> 0" "BLKRRPART-рескан принял новую таблицу"
 chk_a "в devtmpfs (рескан без ребута)" "ноды sda1/sda2 в devtmpfs без ребута"
 chk_a "BIOS-загрузчик gptmbr OK" "BIOS-путь: gptmbr.bin на LBA0"
-chk_a "ESP OK — BOOTX64.EFI" "UEFI-путь: ESP FAT16 с BOOTX64.EFI"
+chk_a "ESP OK — BOOTX64.EFI + VMLINUZ.EFI + CMDLINE" "UEFI-путь: ESP FAT16 (лоадер + ядро + cmdline)"
 chk_a "RESIZE OK" "resize2fs вырастил ext4 до края p2"
+
+# M22: уникальный PARTUUID установки — не канонический, форма 8-4-4-4-12
+canonical="4d494c49-4d20-4d32-8000-000000000001"
+PUA="$(echo "$LA" | sed -n 's/.*minstall: PARTUUID \([0-9a-f-]\{36\}\).*/\1/p' | head -1)"
+if [ -z "$PUA" ]; then
+    echo "   бут A FAIL: PARTUUID установки не напечатан"
+    FAIL=1
+elif [ "$PUA" = "$canonical" ]; then
+    echo "   бут A FAIL: PARTUUID канонический — установки больше не уникальны"
+    FAIL=1
+else
+    echo "   бут A: PARTUUID установки $PUA (не канонический)"
+fi
 
 echo "== бут B: загрузка с диска (SeaBIOS/gptmbr/extlinux), getty + login"
 ( sleep 25; printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
@@ -97,10 +110,13 @@ chk_b() {
     fi
 }
 chk_b "switch_root OK" "загрузка с диска (switch_root) OK"
+chk_b "PARTUUID $PUA -> /dev/sda2" "M22: резолвер PARTUUID нашёл корень установки"
 chk_b "M19 LOGIN OK user=root" "login root (sha512-crypt) OK"
 chk_b "M19 SHELL OK" "root shell OK"
 chk_b "M19 LOGIN OK user=user" "login user (setuid 1000) OK"
 chk_b "M19 USER OK" "user shell OK"
+chk_b "M22 GPU E2E OK" "M22: GPU-фасад e2e в установленной системе"
+chk_b "M22 BULK OK" "M22: bulk-путь IPC в установленной системе"
 chk_b "reboot: Power down" "poweroff S5 OK"
 
 echo "== бут B2: passwd в госте (root-смена + self-смена через setuid)"

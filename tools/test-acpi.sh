@@ -45,6 +45,7 @@ APP="console=ttyS0 panic=-1 memmap=4M\$0x8000000"
     < /dev/null > build/boot-acpi.log
 FAIL=0
 for m in "M11 OK" "M12 OK" "M14 OK" "DHCP OK" \
+         "M22 BULK OK" "M22 GPU E2E OK" \
          "Interpreter enabled" \
          "Using ACPI (MADT) for SMP configuration information" \
          "Brought up 1 node, 4 CPUs" \

@@ -47,6 +47,8 @@ trap 'kill $HTTP_PID 2>/dev/null' EXIT
 FAIL=0
 if grep -q "M11 OK" build/boot.log && grep -q "M12 OK" build/boot.log \
    && grep -q "M14 OK" build/boot.log \
+   && grep -q "M22 BULK OK" build/boot.log \
+   && grep -q "M22 GPU E2E OK" build/boot.log \
    && grep -q "DHCP OK" build/boot.log; then
     echo "BOOT OK"
 else

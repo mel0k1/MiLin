@@ -45,6 +45,9 @@ gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/passwd userspace/passwd.c
 chmod 4755 $R/sbin/passwd
 # M21: last — чтение wtmp (utmp/wtmp пишут login/getty через userspace/utmp.h)
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/last userspace/last.c
+# M22: gputest — e2e mlkd-фасада amdgpu из независимого клиента
+# (kernel/user placement + отказ-пути; вердикт M11/M22 — по нему)
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/gputest userspace/gputest.c
 
 # --- мир Void (tools/get-void-xbps.sh качает и распаковывает в build/void/ex) ---
 sh tools/get-void-xbps.sh
@@ -117,6 +120,17 @@ gcc -static -nostdlib -ffreestanding -O2 -o $RI/init userspace/supervisor.c
 mkdir -p $R/boot
 cp build/bzImage $R/boot/vmlinuz
 cp build/initramfs-install.cpio.gz $R/boot/initramfs.cpio.gz
+# M22: EFI boot manager — лоадер BOOTX64.EFI (PE32+ без relocs, фиксированная
+# геометрия efiboot.ld). Прошивка грузит его, он читает с ESP CMDLINE и
+# стартует VMLINUZ.EFI с LoadOptions — per-install root=PARTUUID
+EFCF="-Os -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
+-mno-red-zone -mgeneral-regs-only -fno-asynchronous-unwind-tables -fno-ident"
+gcc $EFCF -c userspace/efiboot.S -o build/efiboot-s.o
+gcc $EFCF -Wall -c userspace/efiboot.c -o build/efiboot.o
+ld -nostdlib -T userspace/efiboot.ld -o build/efiboot.elf \
+   build/efiboot-s.o build/efiboot.o 2>/dev/null
+objcopy -O binary build/efiboot.elf build/efiboot.pefi
+cp build/efiboot.pefi $R/boot/efiboot.pefi
 ls -lh $R/boot
 ( cd $R && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs.cpio.gz
 ls -lh build/initramfs.cpio.gz build/initramfs-install.cpio.gz
