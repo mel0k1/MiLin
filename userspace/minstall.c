@@ -1,9 +1,10 @@
-// /sbin/minstall <диск> (M20): GPT (ESP + корень) -> BLKRRPART-рескан без
-// ребута -> mkfs.ext4 128M на p2 -> мир -> resize2fs до края партиции ->
-// extlinux --install + gptmbr.bin (BIOS)
-// -> ESP mformat/mcopy (UEFI: прошивка грузит /EFI/BOOT/BOOTX64.EFI — ядро
-// с EFI stub). Канонический PARTUUID корня зашит здесь и в CONFIG_CMDLINE
-// (EFISTUB без LoadOptions берёт cmdline из ядра).
+// /sbin/minstall <диск> (M20/M22): GPT (ESP + корень) -> BLKRRPART-рескан
+// без ребута -> mkfs.ext4 128M на p2 -> мир -> resize2fs до края партиции
+// -> extlinux --install + gptmbr.bin (BIOS)
+// -> ESP: BOOTX64.EFI — наш EFI-лоадер, он читает с ESP CMDLINE и стартует
+// VMLINUZ.EFI с LoadOptions (root=PARTUUID этой установки; у EFI stub
+// LoadOptions перекрывают CONFIG_CMDLINE). GUID'ы disk/ESP/root — urandom
+// v4 на каждую установку, канонического GUID больше нет нигде.
 // запуск: cmdline install=/dev/vdX (oneshot от супервизора) или из шелла.
 
 #include "milin.h"
@@ -18,19 +19,42 @@
 #define NENT        128u
 #define ESZ         128u
 
-// GUID'ы: байты на диске = little-endian первых трёх полей (efi_guid_to_str
-// печатает 4d494c49-4d20-4d32-8000-...). Тип p2 = Linux root x86-64
-// (discoverable); уникальный GUID корня — канонический PARTUUID системы.
+// GUID'ы: байты на диске = little-endian первых трёх полей (guid_str
+// печатает 4d494c49-...). ТИПЫ партиций канонические (ESP + Linux root
+// x86-64 discoverable); уникальные disk/ESP/root — urandom на установку.
 static const u8 GID_ESP[16] = {0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,
                                0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B};
 static const u8 GID_ROOTT[16] = {0xE3,0xBC,0x68,0x4F,0xCD,0xE8,0xB1,0x4D,
                                  0x96,0xE7,0xFB,0xCA,0xF9,0x84,0xB7,0x09};
-static const u8 GID_DISK[16] = {0x49,0x4C,0x49,0x4D,0x20,0x4D,0x32,0x4D,
-                                0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x03};
-static const u8 GID_ESPU[16] = {0x49,0x4C,0x49,0x4D,0x20,0x4D,0x32,0x4D,
-                                0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x02};
-static const u8 GID_ROOTU[16] = {0x49,0x4C,0x49,0x4D,0x20,0x4D,0x32,0x4D,
-                                 0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x01};
+
+// M22: GUID установки — 16 байт /dev/urandom, версия 4 + вариант RFC 4122
+static int gen_guid(u8 g[16]) {
+    long fd = sys3(SYS_open, (long)"/dev/urandom", O_RDONLY, 0);
+    if (fd < 0) return 0;
+    long n = sys3(SYS_read, fd, (long)g, 16);
+    sys3(SYS_close, fd, 0, 0);
+    if (n != 16) return 0;
+    g[7] = (g[7] & 0x0F) | 0x40;
+    g[8] = (g[8] & 0x3F) | 0x80;
+    return 1;
+}
+
+static const char HEXD[17] = "0123456789abcdef";
+
+// 8-4-4-4-12, первые три поля little-endian (как efi_guid_to_str)
+static void guid_str(const u8 g[16], char *out) {
+    int p = 0;
+    for (int f = 0; f < 16; f++) {
+        u8 b = g[f];
+        if (f < 4) b = g[3 - f];        // data1: LE
+        else if (f < 6) b = g[9 - f];   // data2: LE
+        else if (f < 8) b = g[13 - f];  // data3: LE
+        out[p++] = HEXD[b >> 4];
+        out[p++] = HEXD[b & 15];
+        if (f == 3 || f == 5 || f == 7 || f == 9) out[p++] = '-';
+    }
+    out[p] = 0;
+}
 
 struct mstat {
     u64 dev, ino, nlink;
@@ -105,8 +129,11 @@ static int write_at(long fd, u64 off, const void *buf, unsigned n) {
 
 // GPT: защитный MBR + заголовок + записи (основные и запасные).
 // У корневой записи ставится legacy-bootable бит (2) — gptmbr.bin
-// находит загрузочную партицию только по нему.
-static int gpt_write(long fd, u64 nsect) {
+// находит загрузочную партицию только по нему. GUID'ы disk/ESP/root —
+// уникальные этой установки, типы — канонические.
+static int gpt_write(long fd, u64 nsect,
+                     const u8 *disk_guid, const u8 *esp_guid,
+                     const u8 *root_guid) {
     static u8 hdr[512], hdrb[512], ent[16384];
     static u8 mbr[512];
     u64 last = nsect - 1;
@@ -120,12 +147,12 @@ static int gpt_write(long fd, u64 nsect) {
 
     m_memset(ent, 0, 16384);
     m_memcpy(ent, GID_ESP, 16);
-    m_memcpy(ent + 16, GID_ESPU, 16);
+    m_memcpy(ent + 16, esp_guid, 16);
     put64(ent + 32, P1_START);
     put64(ent + 40, P1_START + ESP_SECTORS - 1);
     putname(ent + 56, "ESP");
     m_memcpy(ent + ESZ, GID_ROOTT, 16);
-    m_memcpy(ent + ESZ + 16, GID_ROOTU, 16);
+    m_memcpy(ent + ESZ + 16, root_guid, 16);
     put64(ent + ESZ + 32, P2_START);
     put64(ent + ESZ + 40, last - 33);
     put64(ent + ESZ + 48, 4);
@@ -139,7 +166,7 @@ static int gpt_write(long fd, u64 nsect) {
     put64(hdr + 32, last);
     put64(hdr + 40, 34);
     put64(hdr + 48, last - 33);
-    m_memcpy(hdr + 56, GID_DISK, 16);
+    m_memcpy(hdr + 56, disk_guid, 16);
     put64(hdr + 72, 2);
     put32(hdr + 80, NENT);
     put32(hdr + 84, ESZ);
@@ -161,27 +188,65 @@ static int gpt_write(long fd, u64 nsect) {
     return sys3(SYS_fsync, fd, 0, 0) == 0;
 }
 
-// ESP: FAT16 без внешних тулов — все имена 8.3 (BOOTX64.EFI), LFN и
-// загрузочного кода не нужно (прошивка читает FAT своим драйвером).
+// размер файла через lseek (пейлоад ESP обязан существовать до записи)
+static long file_size(const char *p) {
+    long fd = sys3(SYS_open, (long)p, O_RDONLY, 0);
+    if (fd < 0) return -1;
+    long n = sys3(SYS_lseek, fd, 0, 2 /*SEEK_END*/);
+    sys3(SYS_close, fd, 0, 0);
+    return n;
+}
+
+// файл целиком в цепочку кластеров ESP (8 КиБ на кластер, данные с сектора 97)
+static int esp_put_file(long fd, long start_cl, const char *path) {
+    static u8 cl[8192];
+    long kf = sys3(SYS_open, (long)path, O_RDONLY, 0);
+    if (kf < 0) return 0;
+    long ncl = 0;
+    for (;;) {
+        m_memset(cl, 0, sizeof(cl));
+        long have = 0;
+        while (have < (long)sizeof(cl)) {
+            long n = sys3(SYS_read, kf, (long)cl + have, sizeof(cl) - have);
+            if (n <= 0) break;
+            have += n;
+        }
+        long off = (97 + (start_cl + ncl - 2) * 16) * 512;
+        if (!write_at(fd, off, cl, sizeof(cl))) {
+            sys3(SYS_close, kf, 0, 0);
+            return 0;
+        }
+        ncl++;
+        if (have < (long)sizeof(cl)) break;
+    }
+    sys3(SYS_close, kf, 0, 0);
+    return 1;
+}
+
+// ESP: FAT16 без внешних тулов — все имена 8.3, LFN и загрузочного кода
+// не нужно (прошивка читает FAT своим драйвером).
+// M22: три файла в /EFI/BOOT — BOOTX64.EFI (наш EFI-лоадер), VMLINUZ.EFI
+// (ядро с EFI stub), CMDLINE (ascii-cmdline с root=PARTUUID установки).
+// Кластеры выдаются подряд: /EFI = 2, /EFI/BOOT = 3, файлы с 4; у каждого
+// файла своя цепочка FAT; каталоги одно-кластерные (EOF).
 // 64M = 131072 секторов: 1 BPB + 2 FAT по 32 + корень 32 + данные
-// по 16 секторов на кластер (8 КиБ); ядро пишется подряд — цепочка FAT
-// линейная от кластера 4.
-static int esp_write(const char *esp, const char *kern) {
+// по 16 секторов на кластер (8 КиБ).
+static int esp_write(const char *esp, const char *loader, const char *kern,
+                     const char *cmdtext, u32 cmdlen) {
     static u8 sec[512], fat[16384], dirc[8192], root[16384];
-    static char cb[65536];
+    static u8 cl[8192];
+
+    long lsz = file_size(loader);
+    long ksz = file_size(kern);
+    if (lsz <= 0 || ksz <= 0 || ksz > 0xFFFFFFF0u) return 0;
+    if (cmdlen == 0 || cmdlen > 8192) return 0;
+    long nl = (lsz + 8191) / 8192;
+    long nk = (ksz + 8191) / 8192;
+    if (2 + nl + nk + 1 > 8180) return 0;
+    long cl_loader = 4, cl_kern = 4 + nl, cl_cmd = 4 + nl + nk;
 
     long fd = sys3(SYS_open, (long)esp, O_RDWR, 0);
     if (fd < 0) return 0;
-    long kf = sys3(SYS_open, (long)kern, O_RDONLY, 0);
-    if (kf < 0) {
-        sys3(SYS_close, fd, 0, 0);
-        return 0;
-    }
-    long ksize = sys3(SYS_lseek, kf, 0, 2 /*SEEK_END*/);
-    sys3(SYS_lseek, kf, 0, 0);
-    if (ksize <= 0 || ksize > 0xFFFFFFF0u) goto fail;
-    long ncl = (ksize + 8191) / 8192;
-    if (ncl > 8180) goto fail;
 
     m_memset(sec, 0, 512);
     sec[0] = 0xEB; sec[1] = 0x3C; sec[2] = 0x90;
@@ -208,11 +273,15 @@ static int esp_write(const char *esp, const char *kern) {
     m_memset(fat, 0, sizeof(fat));
     fat[0] = 0xF8; fat[1] = 0xFF;
     fat[2] = 0xFF; fat[3] = 0xFF;
-    put16(fat + 4, 3);
-    put16(fat + 6, 4);
-    for (long i = 0; i < ncl - 1; i++)
-        put16(fat + (4 + i) * 2, 5 + i);
-    put16(fat + (4 + ncl - 1) * 2, 0xFFFF);
+    put16(fat + 2 * 2, 0xFFFF);
+    put16(fat + 3 * 2, 0xFFFF);
+    for (long i = 0; i < nl - 1; i++)
+        put16(fat + (cl_loader + i) * 2, (u16)(cl_loader + i + 1));
+    put16(fat + (cl_loader + nl - 1) * 2, 0xFFFF);
+    for (long i = 0; i < nk - 1; i++)
+        put16(fat + (cl_kern + i) * 2, (u16)(cl_kern + i + 1));
+    put16(fat + (cl_kern + nk - 1) * 2, 0xFFFF);
+    put16(fat + cl_cmd * 2, 0xFFFF);
 
     m_memset(root, 0, sizeof(root));
     m_memcpy(root, "EFI     ", 8);
@@ -242,29 +311,34 @@ static int esp_write(const char *esp, const char *kern) {
     m_memcpy(dirc + 64, "BOOTX64 ", 8);
     m_memcpy(dirc + 72, "EFI", 3);
     dirc[75] = 0x20;
-    put16(dirc + 90, 4);
-    put32(dirc + 92, ksize);
+    put16(dirc + 90, (u16)cl_loader);
+    put32(dirc + 92, (u32)lsz);
+    m_memcpy(dirc + 96, "VMLINUZ ", 8);
+    m_memcpy(dirc + 104, "EFI", 3);
+    dirc[107] = 0x20;
+    put16(dirc + 122, (u16)cl_kern);
+    put32(dirc + 124, (u32)ksz);
+    m_memcpy(dirc + 128, "CMDLINE", 8);
+    dirc[139] = 0x20;
+    put16(dirc + 154, (u16)cl_cmd);
+    put32(dirc + 156, cmdlen);
     if (!write_at(fd, 97 * 512 + 8192, dirc, 8192)) goto fail;
 
     if (!write_at(fd, 0, sec, 512)) goto fail;
     if (!write_at(fd, 512, fat, 16384)) goto fail;
     if (!write_at(fd, 33 * 512, fat, 16384)) goto fail;
     if (!write_at(fd, 65 * 512, root, 16384)) goto fail;
-    long off = 97 * 512 + 2 * 8192;
-    long done = 0;
-    while (done < ksize) {
-        long n = sys3(SYS_read, kf, (long)cb, sizeof(cb));
-        if (n <= 0) break;
-        if (!write_at(fd, off + done, cb, n)) goto fail;
-        done += n;
-    }
-    if (done != ksize) goto fail;
+
+    if (!esp_put_file(fd, cl_loader, loader)) goto fail;
+    if (!esp_put_file(fd, cl_kern, kern)) goto fail;
+    m_memset(cl, 0, sizeof(cl));
+    m_memcpy(cl, cmdtext, cmdlen);
+    if (!write_at(fd, (97 + (cl_cmd - 2) * 16) * 512, cl, 8192)) goto fail;
+
     sys3(SYS_fsync, fd, 0, 0);
-    sys3(SYS_close, kf, 0, 0);
     sys3(SYS_close, fd, 0, 0);
     return 1;
 fail:
-    sys3(SYS_close, kf, 0, 0);
     sys3(SYS_close, fd, 0, 0);
     return 0;
 }
@@ -458,13 +532,44 @@ void milin_main(void) {
     u64 nsect = size >> 9;
 
     crc_init();
+
+    // M22: GUID'ы этой установки — urandom; без энтропии установка честно
+    // падает (дубликаты PARTUUID между машинами недопустимы)
+    u8 g_disk[16], g_esp[16], g_root[16];
+    if (!gen_guid(g_disk) || !gen_guid(g_esp) || !gen_guid(g_root)) {
+        P("minstall: /dev/urandom: FAIL (GUID установки не сгенерировать)\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
     P("minstall: GPT ");
     print_dec_n(nsect);
     P(" секторов: ESP 64M + root\n");
-    if (!gpt_write(fd, nsect)) {
+    if (!gpt_write(fd, nsect, g_disk, g_esp, g_root)) {
         P("minstall: запись GPT: FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
     }
+
+    // самопроверка писателя: GUID корня читается назад с диска и печатается
+    // — по этой строке гейт сверяет уникальность и то, чем грузились B/C
+    {
+        static u8 ent[16384];
+        sys3(SYS_lseek, fd, 2 * 512, SEEK_SET);
+        long n = sys3(SYS_read, fd, (long)ent, 16384);
+        if (n != 16384) {
+            P("minstall: чтение записей GPT: FAIL\n");
+            sys3(SYS_exit, 1, 0, 0);
+        }
+        for (int i = 0; i < 16; i++) {
+            if (ent[ESZ + 16 + i] != g_root[i]) {
+                P("minstall: GUID корня не совпал при чтении назад\n");
+                sys3(SYS_exit, 1, 0, 0);
+            }
+        }
+    }
+    char gs[40];
+    guid_str(g_root, gs);
+    P("minstall: PARTUUID ");
+    print_str(gs);
+    P("\n");
 
     long rr = sys3(SYS_ioctl, fd, BLKRRPART, 0);
     P("minstall: BLKRRPART -> ");
@@ -554,14 +659,15 @@ void milin_main(void) {
     }
     sys3(SYS_chown, (long)"/mst/home/user", 1000, 1000);
 
-    // APPEND: root=<p2> + rw + консольные параметры текущего cmdline
+    // APPEND: root=PARTUUID этой установки + rw + rootwait + параметры
+    // текущего cmdline (BIOS-путь extlinux, UEFI-путь CMDLINE на ESP)
     static char append[512];
     int k = 0;
-    const char *s = "root=";
+    const char *s = "root=PARTUUID=";
     for (int i = 0; s[i]; i++) append[k++] = s[i];
-    for (int i = 0; p2[i]; i++) append[k++] = p2[i];
+    for (int i = 0; gs[i]; i++) append[k++] = gs[i];
     append[k++] = ' ';
-    s = "rw";
+    s = "rw rootwait";
     for (int i = 0; s[i]; i++) append[k++] = s[i];
     append[k++] = ' ';
 
@@ -650,9 +756,16 @@ void milin_main(void) {
         P("minstall: gptmbr.bin нет — только UEFI\n");
     }
 
-    // UEFI-путь: ESP = /EFI/BOOT/BOOTX64.EFI (fallback-имя, без efibootmgr)
-    if (esp_write(p1, "/boot/vmlinuz")) {
-        P("minstall: ESP OK — BOOTX64.EFI (FAT16)\n");
+    // UEFI-путь: BOOTX64.EFI = EFI-лоадер (cmdline per-install с ESP),
+    // VMLINUZ.EFI = ядро, CMDLINE = append. Лоадера нет в мире — ядро
+    // как BOOTX64.EFI (UEFI тогда на каноническом cmdline из ядра)
+    const char *ldr = "/boot/efiboot.pefi";
+    if (file_size(ldr) <= 0) {
+        P("minstall: efiboot.pefi нет — BOOTX64.EFI = ядро (cmdline из CONFIG_CMDLINE)\n");
+        ldr = "/boot/vmlinuz";
+    }
+    if (esp_write(p1, ldr, "/boot/vmlinuz", append, (u32)k)) {
+        P("minstall: ESP OK — BOOTX64.EFI + VMLINUZ.EFI + CMDLINE\n");
     } else {
         P("minstall: ESP FAIL — только BIOS\n");
     }

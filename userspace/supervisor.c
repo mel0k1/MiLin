@@ -658,6 +658,136 @@ static void seed_root(void) {
     P("supervisor: SEED OK\n");
 }
 
+// --- M22: PARTUUID -> устройство ---
+// mount(2) имена PARTUUID не понимает: mini-initramfs монтирует корень
+// сам. Сканируем /dev, у каждого дискового узла читаем GPT (LBA1:
+// заголовок + записи) и ищем партицию с этим уникальным GUID — тот же
+// разбор, что и в ядре (init/do_mounts.c), но в userspace.
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// "8-4-4-4-12" -> 16 дисковых байт (первые три поля little-endian)
+static int guid_parse(const char *s, u8 out[16]) {
+    int f = 0;
+    while (*s && f < 16) {
+        if (*s == '-') { s++; continue; }
+        int h = hexval(s[0]), l = hexval(s[1]);
+        if (h < 0 || l < 0) return 0;
+        u8 b = (u8)(h * 16 + l);
+        if (f < 4) out[3 - f] = b;
+        else if (f < 6) out[9 - f] = b;
+        else if (f < 8) out[15 - f] = b;
+        else out[f] = b;
+        s += 2;
+        f++;
+    }
+    return f == 16 && *s == 0;
+}
+
+// дисковый узел (не партиция): sd/hd/vd? | nvme?n? | mmcblk?
+static int disk_node_name(const char *s) {
+    int n = 0;
+    while (s[n]) n++;
+    if (n == 3 && s[1] == 'd' && (s[0] == 's' || s[0] == 'h' || s[0] == 'v')
+        && s[2] >= 'a' && s[2] <= 'z') return 1;
+    int has_p = 0, has_n = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] == 'p') has_p = 1;
+        if (s[i] == 'n' && i > 4) has_n = 1;
+    }
+    if (has_p) return 0;
+    if (n >= 7 && m_strncmp(s, "mmcblk", 6) == 0) return 1;
+    if (n >= 6 && m_strncmp(s, "nvme", 4) == 0 && has_n) return 1;
+    return 0;
+}
+
+// номер партиции диска с GUID want (0 = не нашлась)
+static long gpt_find_part(const char *devname, const u8 want[16]) {
+    static u8 lba1[512], ent[16384];
+    char path[64];
+    int a = 0;
+    for (; "/dev/"[a]; a++) path[a] = "/dev/"[a];
+    for (int b = 0; devname[b] && a < 60; b++) path[a++] = devname[b];
+    path[a] = 0;
+
+    long fd = sys3(SYS_open, (long)path, O_RDONLY, 0);
+    if (fd < 0) return 0;
+    sys3(SYS_lseek, fd, 512, SEEK_SET);
+    long n = sys3(SYS_read, fd, (long)lba1, 512);
+    if (n != 512 || m_strncmp((const char *)lba1, "EFI PART", 8) != 0) {
+        sys3(SYS_close, fd, 0, 0);
+        return 0;
+    }
+    u64 ent_lba = 0;
+    u32 nent = 0, esz = 0;
+    m_memcpy(&ent_lba, lba1 + 72, 8);
+    m_memcpy(&nent, lba1 + 80, 4);
+    m_memcpy(&esz, lba1 + 84, 4);
+    if (!nent || !esz || esz > 512 || nent > 128) {
+        sys3(SYS_close, fd, 0, 0);
+        return 0;
+    }
+    sys3(SYS_lseek, fd, (long)(ent_lba * 512), SEEK_SET);
+    n = sys3(SYS_read, fd, (long)ent, (long)(nent * esz));
+    sys3(SYS_close, fd, 0, 0);
+    if (n < (long)(nent * esz)) return 0;
+    for (u32 i = 0; i < nent; i++) {
+        const u8 *e = ent + i * esz;
+        int zero = 1;
+        for (int k = 0; k < 16; k++)
+            if (e[k]) { zero = 0; break; }
+        if (zero) continue;
+        int eq = 1;
+        for (int k = 0; k < 16; k++)
+            if (e[16 + k] != want[k]) { eq = 0; break; }
+        if (eq) return (long)i + 1;
+    }
+    return 0;
+}
+
+// PARTUUID -> имя узла партиции (/dev/sda2, /dev/nvme0n1p2, ...)
+static int partuuid_resolve(const char *hex, char *out, int omax) {
+    u8 want[16];
+    if (!guid_parse(hex, want)) return 0;
+
+    static char buf[16384];
+    long fd = sys3(SYS_open, (long)"/dev", O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) return 0;
+    int found = 0;
+    for (;;) {
+        long n = sys3(SYS_getdents64, fd, (long)buf, sizeof(buf));
+        if (n <= 0) break;
+        long off = 0;
+        while (off < n) {
+            struct ldirent64 *e = (struct ldirent64 *)(buf + off);
+            off += e->d_reclen;
+            if (!disk_node_name(e->d_name)) continue;
+            long pn = gpt_find_part(e->d_name, want);
+            if (pn <= 0) continue;
+            int a = 0;
+            while (e->d_name[a] && a < omax - 4) { out[a] = e->d_name[a]; a++; }
+            if (a && out[a - 1] >= '0' && out[a - 1] <= '9' && a < omax - 3)
+                out[a++] = 'p';
+            char num[8];
+            int k = 0;
+            if (!pn) num[k++] = '0';
+            while (pn) { num[k++] = '0' + pn % 10; pn /= 10; }
+            while (k && a < omax - 1) out[a++] = num[--k];
+            out[a] = 0;
+            found = 1;
+            break;
+        }
+        if (found) break;
+    }
+    sys3(SYS_close, fd, 0, 0);
+    return found;
+}
+
 static void cmdline_root(char *out, int max) {
     // /proc/cmdline: "root=/dev/vda1 console=..."; последний root=
     // выигрывает — та же семантика, что и у ядра (bootloader-приложение
@@ -728,6 +858,28 @@ static void try_switch_root(void) {
     char rootdev[64];
     cmdline_root(rootdev, sizeof(rootdev));
     if (!rootdev[0]) return;
+
+    // M22: root=PARTUUID=... -> узел в /dev (уникальный GUID установки)
+    if (m_strncmp(rootdev, "PARTUUID=", 9) == 0) {
+        char node[64];
+        if (!partuuid_resolve(rootdev + 9, node, sizeof(node))) {
+            P("supervisor: PARTUUID ");
+            print_str(rootdev + 9);
+            P(" не нашлась — остаюсь в initramfs\n");
+            return;
+        }
+        P("supervisor: PARTUUID ");
+        print_str(rootdev + 9);
+        P(" -> ");
+        print_str(node);
+        P("\n");
+        int i = 0;
+        while (node[i] && i < (int)sizeof(rootdev) - 1) {
+            rootdev[i] = node[i];
+            i++;
+        }
+        rootdev[i] = 0;
+    }
 
     sys3(SYS_mkdir, (long)"/newroot", 0755, 0);
     long rc = sys5(SYS_mount, (long)rootdev, (long)"/newroot",
