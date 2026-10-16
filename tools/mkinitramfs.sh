@@ -29,6 +29,7 @@ gcc -static -nostdlib -ffreestanding -O2 -DML_REBOOT=1 -o $R/sbin/reboot userspa
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/passwd userspace/passwd.c
 chmod 4755 $R/sbin/passwd
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/last userspace/last.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/who userspace/who.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/gputest userspace/gputest.c
 
 sh tools/get-void-xbps.sh

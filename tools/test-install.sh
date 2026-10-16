@@ -74,7 +74,7 @@ chk_a "ESP OK — BOOTX64.EFI + MILIN/BOOTX64.EFI + VMLINUZ.EFI + CMDLINE" "UEFI
 chk_a "RESIZE OK" "resize2fs вырастил ext4 до края p2"
 
 canonical="4d494c49-4d20-4d32-8000-000000000001"
-PUA="$(echo "$LA" | sed -n 's/.*minstall: PARTUUID \([0-9a-f-]\{36\}\).*/\1/p' | head -1)"
+PUA="$(echo "$LA" | sed -n 's/.*minstall: PARTUUID.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)"
 if [ -z "$PUA" ]; then
     echo "   бут A FAIL: PARTUUID установки не напечатан"
     FAIL=1
@@ -103,7 +103,7 @@ timeout 420 "$BIN" -m 512M $EXTRA -nographic -no-reboot \
     -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000 install=/dev/sda uuid_disk=$GU_DISK uuid_esp=$GU_ESP uuid_root=$GU_ROOT" \
     < /dev/null > build/install-a2.log || true
 LA2="$(tr -d '\000' < build/install-a2.log)"
-PUP="$(echo "$LA2" | sed -n 's/.*minstall: PARTUUID \([0-9a-f-]\{36\}\).*/\1/p' | head -1)"
+PUP="$(echo "$LA2" | sed -n 's/.*minstall: PARTUUID.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)"
 chk_a2() {
     if echo "$LA2" | grep -q "$1"; then
         echo "   бут A2: $2"
@@ -190,6 +190,7 @@ echo "== бут B2: passwd в госте (root-смена + self-смена че
   printf 'echo M20 PASSWD SELF OK\n'; sleep 2; printf 'exit\n'; sleep 5;
   printf 'user\n'; sleep 2; printf 'pass1234\n'; sleep 4;
   printf 'echo M20 PASSWD LOGIN2 OK\n'; sleep 2;
+  printf '/sbin/who\n'; sleep 3;
   printf '/sbin/last\n'; sleep 5; printf 'exit\n'; sleep 5;
   printf 'root\n'; sleep 3; printf 'milin\n'; sleep 4;
   printf '/sbin/poweroff\n' ) \
@@ -219,6 +220,7 @@ fi
 chk_p "M20 PASSWD LOGIN1 OK" "вход user с паролем от root-смены OK"
 chk_p "M20 PASSWD SELF OK" "self-смена с подтверждением текущего OK"
 chk_p "M20 PASSWD LOGIN2 OK" "вход user с паролем после self-смены OK"
+chk_p "M23 WHO OK" "who: сессии из /var/run/utmp"
 chk_p "M21 WTMP OK" "last: wtmp читается, USER_PROCESS есть"
 chk_p "7 user console" "USER_PROCESS записи от login в wtmp"
 chk_p "8 - console" "DEAD_PROCESS записи от getty в wtmp"
