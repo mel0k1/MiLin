@@ -29,8 +29,9 @@ run_boot() {
     echo "== гейт: $name"
     "$BIN" -m 512M $EXTRA -nographic -no-reboot \
         -kernel build/bzImage -initrd build/initramfs.cpio.gz \
-        -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000" \
+        -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000 ${APPEND_EXTRA:-}" \
         "$@" < /dev/null > "build/realhw-$name.log" || true
+    APPEND_EXTRA=""
     if grep -q "M14HW OK" "build/realhw-$name.log"; then
         echo "   OK"
         return 0
@@ -89,6 +90,27 @@ if grep -q "input: QEMU QEMU USB Keyboard" build/realhw-usb-uhci.log; then
     echo "   usb-uhci: клавиатура зарегистрирована"
 else
     echo "   usb-uhci FAIL — usbhid не поднял клавиатуру"
+    FAIL=1
+fi
+
+APPEND_EXTRA="no=uiod" run_boot net-mltap \
+    -machine pc-i440fx-2.5 -smp 4 \
+    -device virtio-rng-pci \
+    -device virtio-net-pci,netdev=net0 -netdev user,id=net0 || FAIL=1
+if grep -q "DHCP OK" build/realhw-net-mltap.log; then
+    echo "   net-mltap: DHCP через /dev/mltap (kernel-netdev) OK"
+else
+    echo "   net-mltap FAIL — DHCP не поднялся"
+    FAIL=1
+fi
+
+run_boot wifi-stack \
+    -machine pc-i440fx-2.5 -smp 4 \
+    -device virtio-rng-pci || FAIL=1
+if grep -q "cfg80211" build/realhw-wifi-stack.log && grep -q "mltap: готов" build/realhw-wifi-stack.log; then
+    echo "   wifi-stack: cfg80211+mac80211+ath9k в ядре, /dev/mltap готов"
+else
+    echo "   wifi-stack FAIL — wireless-стек не поднялся"
     FAIL=1
 fi
 
