@@ -39,6 +39,7 @@
 #include "milin.h"
 #include "ipc.h"
 #include "helq.h"
+#include "bulk.h"
 
 #define MAXREG    8
 #define MAXCLIENT 8
@@ -198,6 +199,50 @@ static int make_helq_region(int seq) {
 // суффикс последнего созданного региона (для unlink после раздачи)
 static char last_path[32];
 
+// M22: арена bulk-слотов — та же shm-семантика, что у helq-региона:
+// файл в /tmp нужен только на момент раздачи fd, дальше объект живёт
+// в памяти, пока живы маппинги адресатов
+static int make_bulk_region(int seq) {
+    char path[32] = "/tmp/mlb-";
+    int n = 9;
+    char num[8];
+    int k = 0;
+    if (!seq) num[k++] = '0';
+    while (seq) { num[k++] = '0' + seq % 10; seq /= 10; }
+    while (k) path[n++] = num[--k];
+    m_memcpy(path + n, ".shm", 5);
+
+    long fd = sys3(SYS_open, (long)path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        P("mlbus: ");
+        print_str(path);
+        P(": open FAIL\n");
+        return -1;
+    }
+    static char zero[4096];
+    m_memset(zero, 0, sizeof(zero));
+    long left = MLB_SIZE;
+    while (left > 0) {
+        long w = sys3(SYS_write, fd, (long)zero,
+                      left < (long)sizeof(zero) ? left : (long)sizeof(zero));
+        if (w <= 0) {
+            P("mlbus: bulk shm: write FAIL\n");
+            sys3(SYS_close, fd, 0, 0);
+            return -1;
+        }
+        left -= w;
+    }
+    struct mlb_hdr *h = mlb_map_raw((int)fd);
+    if (!h) {
+        P("mlbus: bulk shm: mmap MAP_SHARED FAIL\n");
+        sys3(SYS_close, fd, 0, 0);
+        return -1;
+    }
+    mlb_init(h);
+    sys6(SYS_munmap, (long)h, MLB_SIZE, 0, 0, 0, 0);
+    return (int)fd;
+}
+
 static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     const char *name = m->head;
     // transport в head-слоте 2 (слот 0-1 занимает имя, см. lookup_log)
@@ -243,12 +288,12 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     ml_passcred(sv[0]);
     ml_passcred(sv[1]);
 
-    // helq-транспорт: shm-регион с парой очередей, fd -> оба конца
+    // helq-очереди или bulk-арена: shm-регион, fd -> оба конца
     static int seq = 1;
-    int shm = -1;
+    int arena = -1;
     if (transport == ML_TR_HELQ) {
-        shm = make_helq_region(seq++);
-        if (shm >= 0) {
+        arena = make_helq_region(seq++);
+        if (arena >= 0) {
             m_memcpy(last_path, "/tmp/mlq-", 10);
             int n = 9;
             int s = seq - 1;
@@ -259,8 +304,21 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
             while (k) last_path[n++] = num[--k];
             m_memcpy(last_path + n, ".shm", 5);
         }
+    } else if (transport == ML_TR_BULK) {
+        arena = make_bulk_region(seq++);
+        if (arena >= 0) {
+            m_memcpy(last_path, "/tmp/mlb-", 10);
+            int n = 9;
+            int s = seq - 1;
+            char num[8];
+            int k = 0;
+            if (!s) num[k++] = '0';
+            while (s) { num[k++] = '0' + s % 10; s /= 10; }
+            while (k) last_path[n++] = num[--k];
+            m_memcpy(last_path + n, ".shm", 5);
+        }
     }
-    if (shm < 0 && transport == ML_TR_HELQ) {
+    if (arena < 0 && transport != ML_TR_SEQPACKET) {
         struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_IO, 0, {0} };
         ml_send(client, &resp, 0, 0, 0, 0);
         sys3(SYS_close, sv[0], 0, 0);
@@ -280,8 +338,8 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     *ml_h(&rs, 0) = pid;
     *ml_h(&rs, 1) = uid;
     *ml_h(&rs, 2) = transport;
-    long to_srv = shm >= 0
-        ? ml_send(r->conn, &rs, &rights, 4, (int[]){ sv[1], shm }, 2)
+    long to_srv = arena >= 0
+        ? ml_send(r->conn, &rs, &rights, 4, (int[]){ sv[1], arena }, 2)
         : ml_send(r->conn, &rs, &rights, 4, (int[]){ sv[1] }, 1);
     if (to_srv < 0) {
         P("mlbus: lookup ");
@@ -292,7 +350,7 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         pfd_del(r->conn);
         sys3(SYS_close, sv[0], 0, 0);
         sys3(SYS_close, sv[1], 0, 0);
-        if (shm >= 0) sys3(SYS_close, shm, 0, 0);
+        if (arena >= 0) sys3(SYS_close, arena, 0, 0);
         struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_NO_SUCH_ENTITY, 0, {0} };
         ml_send(client, &resp, 0, 0, 0, 0);
         return;
@@ -302,14 +360,14 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     // ЧТО ему разрешено на этом lane'е)
     struct ml_msg rc = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_OK, 0, {0} };
     *ml_h(&rc, 0) = rights;
-    if (shm >= 0)
-        ml_send(client, &rc, 0, 0, (int[]){ sv[0], shm }, 2);
+    if (arena >= 0)
+        ml_send(client, &rc, 0, 0, (int[]){ sv[0], arena }, 2);
     else
         ml_send(client, &rc, 0, 0, (int[]){ sv[0] }, 1);
 
     sys3(SYS_close, sv[0], 0, 0);
     sys3(SYS_close, sv[1], 0, 0);
-    if (shm >= 0) {
+    if (arena >= 0) {
         // unlink после раздачи: объект живёт в памяти, пока живы маппинги
         // (в M2 tmpfs вырезан, имя в /tmp нам больше не нужно)
         sys3(SYS_unlink, (long)last_path, 0, 0);
@@ -322,8 +380,10 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     print_dec_n(uid);
     P(", права 0x");
     print_hex_flat(rights);
-    if (shm >= 0) P(" + helq-регион\n");
-    else P("\n");
+    if (arena >= 0)
+        P(transport == ML_TR_BULK ? " + bulk-арена\n" : " + helq-регион\n");
+    else
+        P("\n");
 }
 
 // обработать одно сообщение с соединения; 1 = conn жив, 0 = закрыт

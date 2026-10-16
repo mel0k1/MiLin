@@ -26,6 +26,7 @@
 #include "milin.h"
 #include "ipc.h"
 #include "helq.h"
+#include "bulk.h"
 
 static u64 served = 0;
 
@@ -36,16 +37,17 @@ static u64 served = 0;
 
 // какая операция какое право требует (0 = разрешено всем)
 static u32 need_cap(u32 msg_id) {
-    if (msg_id == LOG_WRITE || msg_id == LOG_WRITEQ) return ML_CAP_WRITE;
+    if (msg_id == LOG_WRITE || msg_id == LOG_WRITEQ || msg_id == LOG_WRITEB)
+        return ML_CAP_WRITE;
     if (msg_id == LOG_STATS) return ML_CAP_STATS;
     if (msg_id == LOG_RESET) return ML_CAP_ADMIN;
     if (msg_id == LOG_CLOSE) return ML_CAP_CLOSE;
     return 0;
 }
 
-// id ответа на запрос (WRITEQ отвечает WRITE_R)
+// id ответа на запрос (WRITEQ/WRITEB отвечают WRITE_R)
 static u32 resp_id(u32 msg_id) {
-    if (msg_id == LOG_WRITEQ) return LOG_WRITE_R;
+    if (msg_id == LOG_WRITEQ || msg_id == LOG_WRITEB) return LOG_WRITE_R;
     return msg_id + 1;
 }
 
@@ -70,7 +72,7 @@ static void cap_deny(u32 msg_id, u32 need, u32 rights, struct mlq_out *out,
 
 // ack/счётчик: ответы уходят либо в очередь (out), либо в сокет (lane)
 static void log_ack(u32 req_id, u32 tlen, struct mlq_out *out, long lane) {
-    if (req_id == LOG_WRITE || req_id == LOG_WRITEQ) {
+    if (req_id == LOG_WRITE || req_id == LOG_WRITEQ || req_id == LOG_WRITEB) {
         struct ml_msg resp = { ML_PROTO_LOG, LOG_WRITE_R, ML_E_OK, 0, {0} };
         *ml_h(&resp, 0) = tlen; // stored_len
         if (out) mlq_put(out, LOG_WRITE_R, &resp, sizeof(resp), MLQ_FUTEX);
@@ -109,8 +111,8 @@ static void log_print(u32 uid, const char *tail, u32 tlen) {
     sys3(SYS_write, 1, (long)"\n", 1);
 }
 
-// --- M5: lane поверх SOCK_SEQPACKET (до EOF) ---
-static void serve_lane(long lane, u32 rights) {
+// --- M5: lane поверх SOCK_SEQPACKET (до EOF); M22: bulk-арена (может быть 0)
+static void serve_lane(long lane, u32 rights, struct mlb_hdr *arena) {
     // creds: ядро будет прикладывать ucred к каждому сообщению клиента
     ml_passcred(lane);
     for (;;) {
@@ -144,6 +146,29 @@ static void serve_lane(long lane, u32 rights) {
         }
         if (m.msg_id == LOG_WRITE)
             log_print(uid, tail, m.tail_len);
+        if (m.msg_id == LOG_WRITEB) {
+            // M22: bulk — payload в арене, lane несёт ссылку (h[0]=слот,
+            // h[1]=len). Мусорный слот/длина — отказ ML_E_IO, арена не трогается
+            u32 slot = (u32)*ml_h(&m, 0);
+            u32 blen = (u32)*ml_h(&m, 1);
+            if (!arena || slot < 1 || slot > MLB_NSLOTS || blen > MLB_SLOT) {
+                P("log-srv: bulk: плохая ссылка (слот ");
+                print_dec_n(slot);
+                P(", len ");
+                print_dec_n(blen);
+                P(")\n");
+                struct ml_msg resp = { ML_PROTO_LOG, LOG_WRITE_R, ML_E_IO, 0, {0} };
+                ml_send(lane, &resp, 0, 0, 0, 0);
+                continue;
+            }
+            log_print(uid, mlb_ptr(arena, (int)slot), blen);
+            served++;
+            // слот возвращаем ДО ack: ресурс той же арены, из которой писатель
+            // возьмёт следующий payload (иначе flow-control дедлок, как в helq)
+            mlb_give(arena, (int)slot);
+            log_ack(m.msg_id, blen, 0, lane);
+            continue;
+        }
         if (m.msg_id == LOG_WRITE || m.msg_id == LOG_WRITEQ) served++;
         log_ack(m.msg_id, m.tail_len, 0, lane);
     }
@@ -320,8 +345,21 @@ void milin_main(void) {
                 sys3(SYS_close, aux.hooks[1], 0, 0);
                 sys3(SYS_close, aux.hooks[0], 0, 0);
                 P("log-srv: helq-lane закрыт\n");
+            } else if (transport == ML_TR_BULK && aux.nhooks >= 2) {
+                struct mlb_hdr *arena = mlb_map(aux.hooks[1]);
+                if (!arena) {
+                    P("log-srv: bulk-арена: mmap FAIL\n");
+                    sys3(SYS_close, aux.hooks[0], 0, 0);
+                    sys3(SYS_close, aux.hooks[1], 0, 0);
+                    continue;
+                }
+                serve_lane(aux.hooks[0], rights, arena);
+                sys6(SYS_munmap, (long)arena, MLB_SIZE, 0, 0, 0, 0);
+                sys3(SYS_close, aux.hooks[1], 0, 0);
+                sys3(SYS_close, aux.hooks[0], 0, 0);
+                P("log-srv: bulk-lane закрыт\n");
             } else {
-                serve_lane(aux.hooks[0], rights);
+                serve_lane(aux.hooks[0], rights, 0);
             }
         }
     }

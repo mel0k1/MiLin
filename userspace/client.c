@@ -15,6 +15,7 @@
 #include "milin.h"
 #include "ipc.h"
 #include "helq.h"
+#include "bulk.h"
 
 static struct stat64 {
     u64 dev, ino, nlink;
@@ -403,6 +404,87 @@ static int demo_fuse(void) {
     return 0;
 }
 
+// --- M22: bulk-путь: payload в арене, lane несёт ссылку ---
+// слот: writer копирует 128К один раз, сервер читает прямо из shm и
+// возвращает слот до ack (flow control); stored_len в ack подтверждает,
+// сервер получил ссылку и длину, печат в лог — байты реально прошли
+static int demo_bulk(void) {
+    // своя шина: run() закрывает свою после каскада (gclient/FUSE шине
+    // не нужны, bulk-демо — последний клиент шины)
+    long bus = wait_bus();
+    if (bus < 0) {
+        P("client: bulk: шина не отвечает\n");
+        return 1;
+    }
+    struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
+    m_memcpy(q.head, "log", 4);
+    *ml_h(&q, 2) = ML_TR_BULK;
+    struct ml_aux aux;
+    int ok = 0;
+    for (int t = 0; t < 100 && !ok; t++) {
+        if (ml_send(bus, &q, 0, 0, 0, 0) < 0) return 1;
+        struct ml_msg resp;
+        if (ml_recv(bus, &resp, 0, 0, &aux) <= 0) return 1;
+        if (resp.err == ML_E_OK && aux.nhooks >= 2) ok = 1;
+        else if (resp.err != ML_E_OK) return 1;
+        else sleep_ms(20); // сервер ещё обслуживает другой lane
+    }
+    if (!ok) {
+        P("client: bulk: lookup FAIL\n");
+        return 1;
+    }
+    struct mlb_hdr *ar = mlb_map(aux.hooks[1]);
+    if (!ar) {
+        P("client: bulk: mmap FAIL\n");
+        return 1;
+    }
+    sys3(SYS_close, aux.hooks[1], 0, 0);
+    long lane = aux.hooks[0];
+
+    static u8 pat[MLB_SLOT];
+    for (u32 i = 0; i < sizeof(pat); i++)
+        pat[i] = (u8)('A' + i % 26);
+
+    u64 t0 = rdtsc();
+    for (int it = 0; it < 8; it++) {
+        int slot = mlb_take(ar, MLB_WAIT);
+        if (!slot) {
+            P("client: bulk: слот не выдан (сервер умер?)\n");
+            return 1;
+        }
+        m_memcpy(mlb_ptr(ar, slot), pat, sizeof(pat));
+        struct ml_msg w = { ML_PROTO_LOG, LOG_WRITEB, 0, 0, {0} };
+        *ml_h(&w, 0) = (u32)slot;
+        *ml_h(&w, 1) = sizeof(pat);
+        if (ml_send(lane, &w, 0, 0, 0, 0) < 0) {
+            P("client: bulk: send FAIL\n");
+            return 1;
+        }
+        struct ml_msg r;
+        if (ml_recv(lane, &r, 0, 0, 0) <= 0 || r.msg_id != LOG_WRITE_R
+            || r.err != ML_E_OK) {
+            P("client: bulk: ack FAIL\n");
+            return 1;
+        }
+        if (*ml_h(&r, 0) != sizeof(pat)) {
+            P("client: bulk: stored_len FAIL\n");
+            return 1;
+        }
+    }
+    u64 dt = (rdtsc() - t0) / 8;
+    P("client: bulk: 8 x 128KB через арену, ack/len сошлись (avg ");
+    print_dec_n((long)dt);
+    P(" cycles/write)\n");
+    P("M22 BULK OK\n");
+
+    // выход по контракту M5-деmo: seqpacket-lane закрывается EOF'ом
+    // (арена умирает вместе с последним маппингом — шина unlink'нула имя)
+    sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+    sys3(SYS_close, lane, 0, 0);
+    sys3(SYS_close, bus, 0, 0);
+    return 0;
+}
+
 static int run(void) {
     // непривилегированный пользователь: MULTIUSER вернулся
     if (sys3(SYS_setuid, 1000, 0, 0) != 0) {
@@ -711,6 +793,10 @@ static int run(void) {
 
     // 10) M5.2: WRITE/READ/readdir поверх той же ФС
     if (demo_fuse()) return 1;
+
+    // 11) M22: bulk-путь на seqpacket-lane: данные в арене слотов,
+    // lane несёт только ссылку (fast/bulk split)
+    if (demo_bulk()) return 1;
 
     P("client: IPC-демо + capability + отказ-инъекция + FUSE: OK\n");
     return 0;
