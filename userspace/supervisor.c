@@ -55,9 +55,13 @@ static struct svc svcs[SVC_MAX];
 static int nsvcs;
 
 // M19: установленная система (нет /init) не завершается после oneshot'ов;
-// install=<диск> в cmdline запускает инсталлятор oneshot'ом
+// install=<диск> в cmdline запускает инсталлятор oneshot'ом, uuid_*= —
+// операторские GUID'ы GPT (миновают urandom, уходят в argv minstall)
 static int g_installed;
 static char install_dev[64];
+static char uuid_disk[44];
+static char uuid_esp[44];
+static char uuid_root[44];
 
 static int died_by_signal(int status) { return (status & 0x7f) != 0; }
 static int exit_code(int status) { return (status >> 8) & 0xff; }
@@ -214,11 +218,26 @@ static int spawn_svc(struct svc *s) {
     return s->pid;
 }
 
-static int spawn_arg(const char *path, const char *name, const char *arg) {
+static int spawn_install(const char *dev) {
+    static char ua[3][56];
     int pid = sys3(SYS_fork, 0, 0, 0);
     if (pid == 0) {
-        char *argv[] = { (char *)name, (char *)arg, 0 };
-        if (sys3(SYS_execve, (long)path, (long)argv, 0) != 0)
+        char *argv[6];
+        const char *keys[3] = { "uuid_disk=", "uuid_esp=", "uuid_root=" };
+        char *vals[3] = { uuid_disk, uuid_esp, uuid_root };
+        int n = 0;
+        argv[n++] = "minstall";
+        argv[n++] = (char *)dev;
+        for (int i = 0; i < 3; i++) {
+            if (!vals[i][0]) continue;
+            int j = 0, k = 0;
+            while (keys[i][j]) { ua[i][j] = keys[i][j]; j++; }
+            while (vals[i][k] && j < 54) ua[i][j++] = vals[i][k++];
+            ua[i][j] = 0;
+            argv[n++] = ua[i];
+        }
+        argv[n] = 0;
+        if (sys3(SYS_execve, (long)"/sbin/minstall", (long)argv, 0) != 0)
             sys3(SYS_exit, 127, 0, 0);
     }
     return pid;
@@ -600,7 +619,7 @@ static void cmdline_root(char *out, int max) {
     }
 }
 
-static void cmdline_install(char *out, int max) {
+static void cmdline_val(const char *key, int klen, char *out, int max) {
     long fd = sys3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
     if (fd < 0) return;
     char b[512];
@@ -609,9 +628,9 @@ static void cmdline_install(char *out, int max) {
     if (n <= 0) return;
     b[n] = 0;
     for (long i = 0; i < n; i++) {
-        if (b[i] != 'i') continue;
-        if (m_strncmp(b + i, "install=", 8) != 0) continue;
-        long j = i + 8;
+        if (b[i] != key[0]) continue;
+        if (m_strncmp(b + i, key, klen) != 0) continue;
+        long j = i + klen;
         int k = 0;
         while (j < n && b[j] != ' ' && b[j] != '\n' && k < max - 1)
             out[k++] = b[j++];
@@ -776,7 +795,10 @@ void milin_main(void) {
     // (не возвращается при успехе; без root= или с плохим диском — дальше)
     try_switch_root();
 
-    cmdline_install(install_dev, sizeof(install_dev));
+    cmdline_val("install=", 8, install_dev, sizeof(install_dev));
+    cmdline_val("uuid_disk=", 10, uuid_disk, sizeof(uuid_disk));
+    cmdline_val("uuid_esp=", 9, uuid_esp, sizeof(uuid_esp));
+    cmdline_val("uuid_root=", 10, uuid_root, sizeof(uuid_root));
 
     // --- сервисы: из манифестов, в порядке order ---
     load_manifests();
@@ -806,7 +828,7 @@ void milin_main(void) {
         copy_field(s->exec, "/sbin/minstall", sizeof(s->exec));
         s->type = SVC_ONESHOT;
         s->order = 98;
-        s->pid = spawn_arg("/sbin/minstall", "minstall", install_dev);
+        s->pid = spawn_install(install_dev);
         P("supervisor: minstall ");
         print_str(install_dev);
         P(" — установка\n");

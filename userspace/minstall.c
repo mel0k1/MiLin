@@ -1,11 +1,14 @@
-// /sbin/minstall <диск> (M20/M22): GPT (ESP + корень) -> BLKRRPART-рескан
-// без ребута -> mkfs.ext4 128M на p2 -> мир -> resize2fs до края партиции
+// /sbin/minstall <диск> [uuid_disk=GUID] [uuid_esp=GUID] [uuid_root=GUID]
+// (M20/M22): GPT (ESP + корень) -> BLKRRPART-рескан без ребута -> mkfs.ext4
+// 128M на p2 -> мир -> resize2fs до края партиции
 // -> extlinux --install + gptmbr.bin (BIOS)
 // -> ESP: BOOTX64.EFI — наш EFI-лоадер, он читает с ESP CMDLINE и стартует
 // VMLINUZ.EFI с LoadOptions (root=PARTUUID этой установки; у EFI stub
 // LoadOptions перекрывают CONFIG_CMDLINE). GUID'ы disk/ESP/root — urandom
-// v4 на каждую установку, канонического GUID больше нет нигде.
-// запуск: cmdline install=/dev/vdX (oneshot от супервизора) или из шелла.
+// v4 на каждую установку; uuid_*= задаёт их оператору (переустановка с
+// сохранением GUID, клонирование образов), канонического GUID больше нигде.
+// запуск: cmdline install=/dev/vdX [uuid_*=...] (oneshot от супервизора)
+// или из шелла.
 
 #include "milin.h"
 
@@ -40,6 +43,41 @@ static int gen_guid(u8 g[16]) {
 }
 
 static const char HEXD[17] = "0123456789abcdef";
+
+static int guid_eq(const u8 *a, const u8 *b) {
+    for (int i = 0; i < 16; i++)
+        if (a[i] != b[i]) return 0;
+    return 1;
+}
+
+static int hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// uuid_root=... оператора -> байты GPT: обратная guid_str (первые три
+// поля little-endian); тире только на 8/13/18/23, ровно 32 hex-цифры
+static int guid_parse(const char *s, u8 g[16]) {
+    u8 h[16];
+    int n = 0;
+    for (int i = 0; s[i]; i++) {
+        if (s[i] == '-') continue;
+        int v = hexv(s[i]);
+        if (v < 0 || n >= 32) return 0;
+        if (!(n & 1)) h[n >> 1] = (u8)(v << 4);
+        else h[n >> 1] |= (u8)v;
+        n++;
+    }
+    if (n != 32 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' || s[36])
+        return 0;
+    g[0] = h[3]; g[1] = h[2]; g[2] = h[1]; g[3] = h[0];
+    g[4] = h[5]; g[5] = h[4];
+    g[6] = h[7]; g[7] = h[6];
+    for (int i = 8; i < 16; i++) g[i] = h[i];
+    return 1;
+}
 
 // 8-4-4-4-12, первые три поля little-endian (как efi_guid_to_str)
 static void guid_str(const u8 g[16], char *out) {
@@ -531,10 +569,22 @@ static int fork_check(const char *path, char *av[]) {
 
 void milin_main(void) {
     if (!milin_argv || !milin_argv[1]) {
-        P("minstall: usage: minstall /dev/vdX\n");
+        P("minstall: usage: minstall /dev/vdX [uuid_disk=GUID] [uuid_esp=GUID] [uuid_root=GUID]\n");
         sys3(SYS_exit, 1, 0, 0);
     }
     const char *dev = milin_argv[1];
+    const char *ud = 0, *ue = 0, *ur = 0;
+    for (int i = 2; milin_argv[i]; i++) {
+        if (m_strncmp(milin_argv[i], "uuid_disk=", 10) == 0) ud = milin_argv[i] + 10;
+        else if (m_strncmp(milin_argv[i], "uuid_esp=", 9) == 0) ue = milin_argv[i] + 9;
+        else if (m_strncmp(milin_argv[i], "uuid_root=", 10) == 0) ur = milin_argv[i] + 10;
+        else {
+            P("minstall: неизвестный аргумент: ");
+            print_str(milin_argv[i]);
+            P("\n");
+            sys3(SYS_exit, 1, 0, 0);
+        }
+    }
     char p1[64], p2[64];
     scat(p1, dev, "1");
     scat(p2, dev, "2");
@@ -555,12 +605,38 @@ void milin_main(void) {
 
     crc_init();
 
-    // M22: GUID'ы этой установки — urandom; без энтропии установка честно
-    // падает (дубликаты PARTUUID между машинами недопустимы)
+    // M22: GUID'ы установки — urandom, но оператор задаёт любые uuid_*=;
+    // без энтропии (и без заданных) установка честно падает — дубликаты
+    // PARTUUID между машинами недопустимы
     u8 g_disk[16], g_esp[16], g_root[16];
-    if (!gen_guid(g_disk) || !gen_guid(g_esp) || !gen_guid(g_root)) {
+    if (ud && !guid_parse(ud, g_disk)) {
+        P("minstall: uuid_disk= — GUID не 8-4-4-4-12\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
+    if (ue && !guid_parse(ue, g_esp)) {
+        P("minstall: uuid_esp= — GUID не 8-4-4-4-12\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
+    if (ur && !guid_parse(ur, g_root)) {
+        P("minstall: uuid_root= — GUID не 8-4-4-4-12\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
+    if ((!ud && !gen_guid(g_disk)) || (!ue && !gen_guid(g_esp)) ||
+        (!ur && !gen_guid(g_root))) {
         P("minstall: /dev/urandom: FAIL (GUID установки не сгенерировать)\n");
         sys3(SYS_exit, 1, 0, 0);
+    }
+    if (guid_eq(g_disk, g_esp) || guid_eq(g_disk, g_root) || guid_eq(g_esp, g_root)) {
+        P("minstall: GUID'ы партиций совпадают — недопустимо\n");
+        sys3(SYS_exit, 1, 0, 0);
+    }
+    if (ud || ue || ur) {
+        char gt[40];
+        P("minstall: заданы оператором:");
+        if (ud) { guid_str(g_disk, gt); P(" uuid_disk="); print_str(gt); }
+        if (ue) { guid_str(g_esp, gt); P(" uuid_esp="); print_str(gt); }
+        if (ur) { guid_str(g_root, gt); P(" uuid_root="); print_str(gt); }
+        P("\n");
     }
     P("minstall: GPT ");
     print_dec_n(nsect);
@@ -708,6 +784,9 @@ void milin_main(void) {
                 if (i > st2) {
                     if (m_strncmp(cl + st2, "root=", 5) == 0) continue;
                     if (m_strncmp(cl + st2, "install=", 8) == 0) continue;
+                    if (m_strncmp(cl + st2, "uuid_disk=", 10) == 0) continue;
+                    if (m_strncmp(cl + st2, "uuid_esp=", 9) == 0) continue;
+                    if (m_strncmp(cl + st2, "uuid_root=", 10) == 0) continue;
                     for (long j = st2; j < i; j++) append[k++] = cl[j];
                     append[k++] = ' ';
                 }

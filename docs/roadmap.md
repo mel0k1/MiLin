@@ -754,9 +754,23 @@ mlkd-facade e2e и fast/bulk IPC».
   docs/boot-m22-live.log, docs/boot-m22-install.log,
   docs/boot-m22-bios.log, docs/boot-m22-passwd.log,
   docs/boot-m22-uefi.log;
+- пользовательский override PARTUUID (доводка): minstall принимает
+  uuid_disk=/uuid_esp=/uuid_root= — GUID'ы задаёт оператор (переустановка
+  с сохранением GUID, клонирование образов): парсер 8-4-4-4-12 строгий
+  (тире на 8/13/18/23, ровно 32 hex-цифры, обратная guid_str — первые три
+  поля little-endian), дубликаты между партициями запрещены, эхо
+  round-trip parse->str. Супервизор выносит uuid_*= из /proc/cmdline и
+  передаёт их в argv minstall'а (cmdline-токены не утекают в
+  extlinux.conf/CMDLINE — фильтр APPEND). Гейт: бут A2 — переустановка
+  с операторскими GUID'ами на тот же диск, случайный PARTUUID вытеснен,
+  бут B грузится по операторскому root=PARTUUID (резолвер + APPEND
+  проверены на заданных GUID'ах); STAGE-режим гейта для посегментного
+  прогона (TCG-песочницы без KVM);
 - осталось: подпись ESP-лоадера (SBAT/secure boot), boot-entry в
   NVRAM (efibootmgr-совместимость), bulk-путь для GPU-протокола
-  (командные буферы больше ML_MAXTAIL).
+  (командные буферы больше ML_MAXTAIL) — закрыто бутами C1/C2/D/D2
+  (см. docs/boot-m22-uefi-c*.log, docs/boot-m22-secureboot*.log) и
+  SUBMITB-ареной gputest/gpud.
 
 ## Статус
 
