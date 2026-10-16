@@ -695,8 +695,68 @@ passwd.
   user). Проверка вскрытием образа: 15/15 записей ненулевые, история
   бутов B -> B2 -> C полная, utmp-слот корректен. Логи:
   docs/boot-m21-install.log, docs/boot-m21-last.log;
-- осталось: пользоватские PARTUUID (одна каноническая GUID на все
-  установки), mlkd-фасад amdgpu e2e, fast/bulk split IPC.
+### M22 — пользоватские PARTUUID + mlkd-фасад e2e + fast/bulk IPC
+
+Хвосты M21. Одобрено: «да, двигаемся дальше пользоватские PARTUUID,
+mlkd-facade e2e и fast/bulk IPC».
+
+- пользоватские PARTUUID: канонического GUID больше нет нигде. minstall
+  генерирует disk/ESP/root GUID'ы из /dev/urandom (версия 4, вариант
+  RFC 4122), самопроверка писателя — GUID корня читается назад с диска —
+  и печат «minstall: PARTUUID <guid>» (строку берёт гейт). BIOS-путь:
+  extlinux APPEND root=PARTUUID=<guid>. UEFI-путь: BOOTX64.EFI — наш
+  EFI boot manager (userspace/efiboot.{c,S} + efiboot.ld; PE32+ 16 КБ
+  без .reloc на фиксированном ImageBase, SysV→Win64 туннели
+  efi_call1..6): читает с ESP CMDLINE (ascii-cmdline с per-install
+  root=) и стартует VMLINUZ.EFI через LoadImage+LoadOptions+StartImage
+  (LoadOptions перекрывают CONFIG_CMDLINE — ядро не пересобирается под
+  установку). mini-initramfs: резолвер PARTUUID→узел в супервизоре
+  (скан /dev, разбор GPT LBA1, имя партиции sda2/nvme0n1p2) — mount(2)
+  имена PARTUUID не понимает. CONFIG_CMDLINE очищен от root=;
+  - два бага, найденных гейтом: (1) в EFI_BOOT_SERVICES есть
+    SignalEvent между WaitForEvent и CloseEvent — без него все слоты с
+    12-го съезжали, HandleProtocol читался как
+    UninstallProtocolInterface и отвечал NOT_FOUND; (2) efi_call6: у
+    SysV fn — 7-й аргумент (RDI, как у всех), а 8-й (a6) — на стеке —
+    перепутанные слоты прыгали по адресу &child, firmware exception
+    handler молча зацикливался (LoadImage выглядел «зависшим» и по
+    device path, и с SourceBuffer); LoadImage по device path на этом
+    firmware так и не завёлся — ядро читается сами через
+    SimpleFileSystem и грузится SourceBuffer'ом (DeviceHandle у child
+    пустой, efi_load_initrd переживает отсутствие источников);
+- mlkd-фасад amdgpu e2e: gpu_demo переехал из /init в /sbin/gputest
+  (oneshot, order 92) — у фасада один владелец placement, гонок с демо
+  шины нет. Фазы: kernel (/dev/amdgpu INFO→ALLOC→SUBMIT→WAIT→FREE в
+  kthread'е домена), deny (placement=user → /dev ALLOC = -ENODEV),
+  caps (fork+setuid(1000): LOOKUP "gpu.amdgpu" = ML_E_PERM — world=0),
+  user (lane к gpud, mode=FACADE, полный цикл), return (placement=
+  kernel → /dev ожил, gpud уступил ML_E_PERM). Вердикт M11/M22 — по
+  статусу oneshot'а; шинные фазы переживают смерть шины ретраями
+  (демо каскада M7.2);
+- fast/bulk split IPC: userspace/bulk.h — арена bulk-слотов в
+  разделяемой памяти (4×128 КБ, lock-free freelist на CAS,
+  futex-будильник с таймаутом 50 мс — сосед по shm умирает невидимо).
+  Транспорт ML_TR_BULK в шине: seqpacket-lane + арена (hooks[1], shm в
+  /tmp, unlink после раздачи). LOG_WRITEB у log-сервера: h[0]=слот,
+  h[1]=len, payload читается прямо из общей памяти (zero copy на
+  receive), слот возвращается ДО ack (flow control, как в helq).
+  Клиент: 8×128 КБ через арену, stored_len в ack сходится
+  (M22 BULK OK), печат 64 байт паттерна в лог — байты реально прошли;
+- ramfs statfs (попутно, ядро): simple_statfs отдавал нули в
+  f_blocks/f_bfree — xbps из живого репо читает их как «0B free» и
+  срывает транзакцию; ramfs_statfs честно отдаёт totalram/freeram;
+- гейт: INSTALL GATES OK — бут A (уникальный GUID + ESP из трёх
+  файлов: BOOTX64.EFI/VMLINUZ.EFI/CMDLINE), бут B (BIOS/extlinux
+  root=PARTUUID + резолвер + GPU e2e + bulk в установленной системе),
+  бут B2 (passwd/last), бут C (OVMF → наш лоадер → LoadOptions →
+  прямой root-mount по PARTUUID → login → poweroff). Регрессии: BOOT
+  OK + SMP OK, ACPI GATES OK (POWEROFF + REBOOT). Логи:
+  docs/boot-m22-live.log, docs/boot-m22-install.log,
+  docs/boot-m22-bios.log, docs/boot-m22-passwd.log,
+  docs/boot-m22-uefi.log;
+- осталось: подпись ESP-лоадера (SBAT/secure boot), boot-entry в
+  NVRAM (efibootmgr-совместимость), bulk-путь для GPU-протокола
+  (командные буферы больше ML_MAXTAIL).
 
 ## Статус
 
@@ -726,6 +786,7 @@ passwd.
 | M19 | MiLini как устанавливаемая ОС: инсталлятор, getty/login | ✅ сделано |
 | M20 | таблица партиций (рескан) + UEFI-бут + passwd в госте | ✅ сделано |
 | M21 | utmp/wtmp + resize2fs | ✅ сделано |
+| M22 | пользоватские PARTUUID + mlkd-фасад e2e + fast/bulk IPC | ✅ сделано |
 
 ## Честные оговорки
 
