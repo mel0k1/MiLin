@@ -112,12 +112,33 @@ Groups = prime256v1
 EOF
 # M19: payload инсталлятора — ядро + мини-initramfs (только /init) в /boot;
 # установленный корень получает мир с диска, полный initramfs на диск не пишется
+# M22: подпись secure boot — ядро и лоадер подписываются db-ключом
+# (tools/sb-keys.sh генерит тестовые PK/KEK/db). sbsign в PATH нет (CI) —
+# уходят неподписанные образы, secure boot-гейт (бут D) тогда пропускается.
+SB=""
+if command -v sbsign >/dev/null 2>&1; then
+    SB=sbsign
+elif [ -x /home/z/my-project/root/usr/bin/sbsign ]; then
+    PATH="/home/z/my-project/root/usr/bin:$PATH"
+    export PATH
+    LD_LIBRARY_PATH="/home/z/my-project/root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+    SB=sbsign
+fi
 RI=build/rootfs-install
 rm -rf $RI
 mkdir -p $RI/dev $RI/newroot $RI/proc $RI/sys $RI/tmp
 gcc -static -nostdlib -ffreestanding -O2 -o $RI/init userspace/supervisor.c
 ( cd $RI && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs-install.cpio.gz
 mkdir -p $R/boot
+if [ -n "$SB" ]; then
+    sh tools/sb-keys.sh
+    # подпись bzImage: сертификат дописывается в конец, real-mode заголовок
+    # не трогается (objcopy переписал бы весь PE — BIOS-путь ломается)
+    cp build/bzImage build/bzImage-unsigned
+    $SB --key keys/db.key --cert keys/db.crt \
+        --output build/bzImage build/bzImage-unsigned
+fi
 cp build/bzImage $R/boot/vmlinuz
 cp build/initramfs-install.cpio.gz $R/boot/initramfs.cpio.gz
 # M22: EFI boot manager — лоадер BOOTX64.EFI (PE32+ без relocs, фиксированная
@@ -130,6 +151,13 @@ gcc $EFCF -Wall -c userspace/efiboot.c -o build/efiboot.o
 ld -nostdlib -T userspace/efiboot.ld -o build/efiboot.elf \
    build/efiboot-s.o build/efiboot.o 2>/dev/null
 objcopy -O binary build/efiboot.elf build/efiboot.pefi
+# M22: подпись лоадера (SBAT-секция уже в образе) — Certificate Table
+# заполнит sbsign, геометрия не меняется
+if [ -n "$SB" ]; then
+    cp build/efiboot.pefi build/efiboot-unsigned.pefi
+    $SB --key keys/db.key --cert keys/db.crt \
+        --output build/efiboot.pefi build/efiboot-unsigned.pefi
+fi
 cp build/efiboot.pefi $R/boot/efiboot.pefi
 ls -lh $R/boot
 ( cd $R && find . | cpio -o -H newc --quiet | gzip -9 ) > build/initramfs.cpio.gz
