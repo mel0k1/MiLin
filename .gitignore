@@ -8,3 +8,4 @@
 *.bzImage
 *.log
 !docs/*.log
+/keys/
