@@ -1,8 +1,5 @@
 #!/bin/sh
 # M14: мир Void в госте — версии из ЖИВОГО репо, а не хардкод.
-# индекс: <repo>/<arch>-repodata (zstd -> tar -> index.plist); пакеты лежат
-# плоско: <repo>/<pkgver>.<arch>.xbps (xbps/lib/util.c: "%s/%s.%s.xbps").
-# ca-certificates — TLS-доверие для https-репо в госте.
 set -e
 MI="$(cd "$(dirname "$0")/.." && pwd)"
 V="$MI/build/void"
@@ -17,7 +14,6 @@ PKGS="xbps libxbps libarchive libcrypto3 libssl3 openssl zlib libzstd \
 liblzma liblz4 bzip2 acl attr glibc ca-certificates xbps-triggers \
 e2fsprogs e2fsprogs-libs syslinux libblkid libuuid util-linux-common libsmartcols"
 
-# 1) живой индекс (кэш на 10 минут — версии крутятся)
 IDX="$V/repodata-$ARCH.cache"
 need=1
 [ -f "$IDX" ] && [ $(( $(date +%s) - $(stat -c %Y "$IDX") )) -lt 600 ] && need=0
@@ -28,7 +24,6 @@ if [ "$need" = 1 ]; then
     rm -f "$IDX.cache"
 fi
 
-# 2) pkgver каждого пакета из индекса
 getver() {
     python3 - "$IDX" "$1" <<'PYEOF'
 import plistlib, sys
@@ -41,7 +36,6 @@ print(p['pkgver'])
 PYEOF
 }
 
-# 3) скачать и распаковать
 for name in $PKGS; do
     ver="$(getver "$name")"
     f="$V/$ver.$ARCH.xbps"

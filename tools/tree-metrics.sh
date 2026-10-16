@@ -1,7 +1,5 @@
 #!/bin/sh
 # метрики обрезанного дерева MiLin: размер исходников, файлы, строки,
-# плюс размер собранного ядра. Печатает markdown-таблицу в stdout.
-# использование: tree-metrics.sh <tree-dir> [path/to/bzImage]
 set -e
 T="${1:?usage: tree-metrics.sh <tree-dir> [bzImage]}"
 B="$2"

@@ -1,12 +1,5 @@
 #!/bin/sh
 # M17-гейт: ACPI на СОВРЕМЕННОЙ машине. run-qemu.sh гейтит legacy
-# (pc-i440fx-2.5): там MPS несёт все CPU и ACPI не нужен. Здесь свежий
-# тип машины (q35): SeaBIOS кладёт в MPS только boot-CPU, 4 CPU поднимает
-# только ACPI MADT; PCI-глю ACPI виден по IRQ routing, namespace-проход —
-# по pnpacpi. Выходы ядра: бут 2 — S5 poweroff ("reboot: Power down",
-# qemu завершается сам), бут 3 — reboot ("reboot: Restarting system",
-# при -no-reboot qemu выходит). Сервисный след M16 (DHCP на e1000)
-# обязателен во всех трёх бутах — регрессия не прячется за ACPI.
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p build
@@ -17,7 +10,6 @@ for R in root ../root; do
     if [ -x "$R/usr/bin/qemu-system-x86_64" ]; then
         export LD_LIBRARY_PATH="$PWD/$R/usr/lib/x86_64-linux-gnu:$PWD/$R/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         BIN="$PWD/$R/usr/bin/qemu-system-x86_64"
-        # cpio/gzip для вариантного initrd — из того же offline-тулчейна
         export PATH="$PWD/$R/usr/bin:$PWD/$R/bin:$PATH"
         for d in "$R/usr/share/qemu-fw" "$R/usr/share/qemu"; do
             [ -d "$d" ] && { EXTRA="-L $PWD/$d"; break; }
@@ -25,7 +17,6 @@ for R in root ../root; do
         break
     fi
 done
-# HTTP-репо хоста для M12-гейта: 10.0.2.2:8000 в slirp -> 127.0.0.1:8000
 mkdir -p build/http-root
 echo "MiLin M12 http-root" > build/http-root/index.html
 python3 -m http.server 8000 --bind 127.0.0.1 -d build/http-root \
@@ -39,7 +30,6 @@ QARGS="-m 512M $EXTRA -nographic -vga none -machine q35 -smp 4 \
     -kernel build/bzImage"
 APP="console=ttyS0 panic=-1 memmap=4M\$0x8000000"
 
-# --- бут 1: полный сервисный след на q35 (MADT + _PRT) ---
 "$BIN" $QARGS -no-reboot \
     -initrd build/initramfs.cpio.gz -append "$APP" \
     < /dev/null > build/boot-acpi.log
@@ -60,7 +50,6 @@ if [ "$FAIL" = 0 ]; then
     echo "ACPI GATES OK (q35 -smp 4: MADT 4 CPUs + IRQ routing + chain M16)"
 fi
 
-# --- вариантный initramfs: oneshot'ы poweroff/reboot (order=99, последними) ---
 rm -rf build/rootfs-pm
 cp -a build/rootfs build/rootfs-pm
 gcc -static -nostdlib -ffreestanding -O2 -o build/rootfs-pm/sbin/poweroff userspace/poweroff.c
@@ -74,7 +63,6 @@ mk_pm_initrd() {
         > build/initramfs-pm.cpio.gz
 }
 
-# --- бут 2: S5 poweroff — qemu обязан завершиться сам ---
 mk_pm_initrd poweroff
 set +e
 "$BIN" $QARGS -no-reboot \
@@ -90,7 +78,6 @@ else
     FAIL=1
 fi
 
-# --- бут 3: reboot — при -no-reboot qemu выходит на рестарте ---
 mk_pm_initrd reboot
 set +e
 "$BIN" $QARGS -no-reboot \

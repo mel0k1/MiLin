@@ -1,17 +1,5 @@
 #!/bin/sh
 # test-realhw.sh (M14/M16/M18): бут-гейты реального железа.
-# 1) virtio-blk + ext4 (быстрый QEMU-путь, тот же контракт что и SATA/NVMe)
-# 2) AHCI/SATA (q35 — как SATA-контроллер реальной машины)
-# 3) NVMe (как NVMe-SSD реальной машины)
-# 4) VGA-консоль (реальное железо без serial)
-# 5) EFI-fb + fbcon (OVMF — UEFI Class 3 без CSM: VGA text отсутствует,
-#    картинку даёт прошивочный framebuffer, fbcon садится на tty0)
-# 6) psmouse (мыши/тачпады i8042 AUX — ноутбуки)
-# 7) usb-storage (USB-флешки поверх SCSI sd)
-# каждый гейт: ядро + initramfs грузятся, mnttest монтирует ext4 и гоняет
-# roundtrip; маркер M14HW OK в логе — гейт пройден.
-# M16: -smp 4 везде; машины pc-i440fx-2.5/q35-2.9 — MPS legacy-BIOS несёт
-# все CPU (современные типы машин отдали AP-перечисление ACPI MADT — M17).
 set -e
 cd "$(dirname "$0")/.."
 export PATH=/home/z/my-project/root/usr/bin:$PATH
@@ -30,7 +18,6 @@ for R in root ../root; do
     fi
 done
 
-# тестовый ext4-диск: пустой raw, форматим хостовым mkfs.ext4
 DISK=build/realhw-disk.img
 rm -f "$DISK"
 truncate -s 64M "$DISK"
@@ -69,8 +56,6 @@ run_boot nvme \
     -drive id=d2,if=none,format=raw,file="$DISK" \
     -device nvme,drive=d2,serial=MILIN01 || FAIL=1
 
-# e1000e (82574L — как Intel-NIC реальной машины): DHCP + сеть через netd;
-# M16: DHCP на 4-CPU системе
 run_boot nic-e1000e \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -83,8 +68,6 @@ else
     FAIL=1
 fi
 
-# USB-клавиатуры (M15): xHCI (USB3-машины) и UHCI (старые Intel) —
-# usbcore + HCD + usbhid должны перечислить usb-kbd как input-устройство
 run_boot usb-xhci \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -109,7 +92,6 @@ else
     FAIL=1
 fi
 
-# VGA-консоль: без -nographic, дисплей пустой — ядро должно поднять tty0
 "$BIN" -m 512M $EXTRA -no-reboot -vga std -display none -serial stdio \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -124,11 +106,6 @@ else
     FAIL=1
 fi
 
-# EFI-fb + fbcon (M18): UEFI Class 3 машины не оставляют VGA text —
-# единственный путь картинки: EFI stub заполняет screen_info, sysfb
-# отдаёт прошивочный fb драйверу (simplefb/efifb), fbcon садится на
-# tty0. Гейт требует и картинку, и полный сервисный след (ext4 + DHCP)
-# под OVMF — регрессия не прячется за fbcon.
 OVMF_CODE=""
 OVMF_VARS=""
 for R in root ../root; do
@@ -167,8 +144,6 @@ else
     echo "== гейт: efifb ПРОПУЩЕН — нет OVMF.fd в тулчейне"
 fi
 
-# psmouse (M18): QEMU всегда вешает свою PS/2-мышь на AUX-порт i8042 —
-# отдельный device-флаг не нужен; psmouse обязан поднять input-мышь
 run_boot psmouse \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -180,8 +155,6 @@ else
     FAIL=1
 fi
 
-# usb-storage (M18): USB-флешка/диск поверх SCSI sd; диск вынесен в
-# второй образ, чтобы mnttest на virtio-корне не спорил за устройство
 UDISK=build/realhw-usbdisk.img
 rm -f "$UDISK"
 truncate -s 32M "$UDISK"

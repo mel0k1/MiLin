@@ -1,9 +1,5 @@
 #!/bin/sh
 # mkimage.sh (M14): загрузочный образ MiLini для реального железа.
-# гибридный ISO: BIOS (El Torito, boot_hybrid.img) + UEFI (efi.img -> ESP),
-# пишется dd-ом на USB (BIOS и UEFI) или прожигается на CD.
-# grub-mkrescue не используется: дебиановский ищет платформы в /usr/lib/grub,
-# а у нас offline-тулчейн без root — собираем ядра GRUB grub-mkimage'ом.
 set -e
 MI="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$MI"
@@ -14,8 +10,6 @@ export LD_LIBRARY_PATH="$G/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRA
 [ -f build/bzImage ] || { echo "mkimage: нет build/bzImage — сначала build.sh"; exit 1; }
 [ -f build/initramfs.cpio.gz ] || tools/mkinitramfs.sh
 
-# grub.cfg: tty0 (реальная машина) + ttyS0 (сервер/отладка); $ экранируем —
-# GRUB раскрывает $VARS в конфиге и съедает memmap=4M$0x8000000
 cat > build/grub.cfg <<'EOF'
 set default=0
 set timeout=2
@@ -30,7 +24,6 @@ menuentry "MiLini (serial only)" {
 }
 EOF
 
-# --- BIOS-ядро GRUB (core.img: cdboot/eltorito + hybrid MBR) ---
 PMOD="$G/usr/lib/grub/i386-pc"
 grub-mkimage --directory="$PMOD" -O i386-pc -p '(cd)/boot/grub' \
     -o build/core.img \
@@ -39,11 +32,7 @@ grub-mkimage --directory="$PMOD" -O i386-pc -p '(cd)/boot/grub' \
     search_fs_file search_label search_fs_uuid
 cat "$PMOD/cdboot.img" build/core.img > build/eltorito.img
 
-# --- UEFI-ядро GRUB: fat.img = memdisk + El Torito EFI-образ ---
-# конфиг внутри fat-диска: EFI-бинарь самодостаточен (префикс (cd) в UEFI
-# не резолвится — падали в grub>); тот же fat.img идёт в El Torito
 MOD="$G/usr/lib/grub/x86_64-efi"
-# memdisk: только grub.cfg (2.9МБ флоппи хватает)
 mformat -C -i build/efi-cd/mem.img -f 2880 ::
 mmd -i build/efi-cd/mem.img ::/boot
 mmd -i build/efi-cd/mem.img ::/boot/grub
@@ -54,8 +43,6 @@ grub-mkimage --directory="$MOD" -O x86_64-efi \
     memdisk iso9660 gzio all_video linux normal echo ls test gfxterm serial \
     font terminal configfile boot fat search search_fs_file \
     search_label search_fs_uuid part_gpt part_msdos
-# El Torito EFI-образ: BOOTX64 + конфиг (32МБ FAT — mtools капризничает
-# на больших файлах в мелких FAT)
 mformat -C -i build/efi-cd/efi.img -T 65536 ::
 mmd -i build/efi-cd/efi.img ::/EFI
 mmd -i build/efi-cd/efi.img ::/EFI/boot
@@ -65,7 +52,6 @@ mcopy -i build/efi-cd/efi.img build/bootx64.efi ::/EFI/boot/BOOTX64.EFI
 mcopy -i build/efi-cd/efi.img build/grub.cfg ::/boot/grub/grub.cfg
 cp build/efi-cd/efi.img build/efi.img
 
-# --- дерево ISO ---
 ROOT=build/iso-root
 rm -rf "$ROOT"
 mkdir -p "$ROOT/boot/grub/i386-pc"

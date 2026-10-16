@@ -1,9 +1,5 @@
 #!/bin/sh
 # sb-keys.sh (M22): тестовые ключи secure boot для гейта OVMF (бут D).
-# PK/KEK/db — self-signed X509 (RSA-2048); mkinitramfs.sh подписывает ими
-# лоадер и ядро (sbsign), гейт записывает их в vars virt-fw-vars'ом.
-# keys/ в git не попадает, генерация один раз на песочницу; идемпотент —
-# существующие ключи не трогаются (иначе подписи в build/ отваливаются).
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p keys

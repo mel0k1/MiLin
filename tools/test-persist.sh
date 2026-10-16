@@ -1,10 +1,5 @@
 #!/bin/sh
 # test-persist.sh (M15): switch_root на постоянный ext4 — двухбутовый e2e.
-# Бут A: пустой ext4, root=/dev/vda — супервизор сеет копию мира (SEED OK),
-#        переезжает (switch_root OK), xbpstest ставит dash из настоящего
-#        Void-репо и пишет маркер /var/milin/installed УЖЕ на ext4.
-# Бут B: свежий QEMU-процесс, тот же диск: маркер живёт только на диске —
-#        persistcheck (order=95, до xbpstest) его читает -> PERSIST OK.
 set -e
 cd "$(dirname "$0")/.."
 export PATH=/home/z/my-project/root/usr/bin:$PATH

@@ -1,13 +1,5 @@
 #!/bin/sh
 # carve.sh — хирургия исходников Linux: проект MiLin, этап M3.
-# Физически удаляет подсистемы из дерева и чинит Kbuild/Kconfig так,
-# чтобы сборка не замечала пропажу. Коммиты делает вызывающий.
-#
-# usage: carve.sh <step>       (TREE_DIR=<путь к клону linux>)
-# steps: arch | deadtop | subsys | drivers | fs | kernel | all
-#
-# Принцип: каждый шаг = один коммит в форке; после шага дерево обязано
-# собираться и грузиться (проверяет вызывающий через build.sh + run-qemu.sh).
 
 set -e
 TREE="${TREE_DIR:?установи TREE_DIR=<путь к клону linux>}"
@@ -20,22 +12,13 @@ fix() {
     python3 "$HERE/fix-dead-refs.py" "$TREE"
 }
 
-# --- шаг 1: все архитектуры кроме x86 -------------------------------------
-# arch/Kconfig (файл) — общий заголовок arch-опций, его оставляем.
 step_arch() {
     say "arch: удаляю все архитектуры кроме x86"
     find "$TREE/arch" -mindepth 1 -maxdepth 1 -type d ! -name x86 -exec rm -rf {} +
-    # hostfs — файловая система UML (чужая архитектура); ванильный fs/Makefile
-    # тянет её безусловно, а она инклудит arch/um/scripts/Makefile.rules
     rm -rf "$TREE/fs/hostfs"
     fix
 }
 
-# --- шаг 2: заведомо мёртвый груз верхнего уровня --------------------------
-# Documentation/samples — не участвуют в vmlinux; rust/certs — выключены;
-# usr/ — built-in initramfs (мы грузим внешний initrd); io_uring выключен.
-# Швы: sched (io_wq-стабы), initramfs (__initramfs_size), init/Kconfig
-# (меню RD_* переезжает из usr/Kconfig), console_on_rootfs (узел /dev/console).
 step_deadtop() {
     say "deadtop: Documentation, samples, rust, certs, usr, io_uring"
     rm -rf "$TREE/Documentation" "$TREE/samples" "$TREE/rust" \
@@ -114,7 +97,6 @@ patch('init/do_mounts.c',
       '\tinit_mkdir("/root", 0700);\n'
       '\tmount_root_generic("/dev/root", root_device_name, root_mountflags);')
 PYEOF
-    # меню декомпрессоров внешнего initrd: из usr/Kconfig в init/Kconfig
     python3 - "$TREE" <<'PYEOF'
 import sys, subprocess
 tree = sys.argv[1]
@@ -145,15 +127,6 @@ print("  stitch: init/Kconfig (RD_* menu appended)")
 PYEOF
 }
 
-# --- шаг 3: подсистемы, выключенные ещё в M2 --------------------------------
-# M2/M3: sound/net/block/crypto/virt/ipc резались целиком. К M14 политика
-# изменилась: net вернулся авторским минимумом (M5, AF_UNIX; файлы
-# net/Kconfig и net/Makefile — авторские, живут в форке), block+crypto
-# вернулись целиком как контракт бут-хранения (M14: AHCI/NVMe/virtio-blk,
-# ext4/jbd2/crc32c). Под нож идут только sound, virt(+kvm).
-# security/ не удаляем, а ужимаем до двух безусловно-линкуемых файлов:
-# commoncap.o (cap_capable/cap_ptrace_* — kernel/capability.c и ptrace)
-# и min_addr.o (mmap_min_addr) — это клей, а не подсистема.
 step_subsys() {
     say "subsys: sound, virt, x86/kvm; security -> 2 файла"
     rm -rf "$TREE/sound" "$TREE/virt" "$TREE/arch/x86/kvm"
@@ -172,14 +145,6 @@ EOF
     fix
 }
 
-# --- шаг 4: drivers — оставляем минимум -------------------------------------
-# base (модель драйверов), tty (serial-консоль), char (misc/random),
-# virtio (транспорт будущих userspace-серверов), firmware, uio (M4).
-# clocksource/rtc возвращены после первой попытки: arch/x86 безусловно
-# линкуется с i8253 PIT (clockevent_i8253_*) и CMOS RTC (mc146818_*).
-# M4: pci — шина для userspace-драйверов (uio_pci_generic); video —
-# screen_info_pci.o, на который ссылается vgaarb из drivers/pci.
-# M17: acpi+pnp — MADT (SMP на современных машинах), _PRT, S5 poweroff.
 DRIVERS_KEEP="base tty char virtio firmware uio clocksource rtc pci video net block ata scsi nvme input acpi pnp"
 step_drivers() {
     say "drivers: оставляю только: $DRIVERS_KEEP"
@@ -194,9 +159,6 @@ step_drivers() {
     fix
 }
 
-# --- шаг 5: fs — ядро ВФС + ramfs (rootfs) + fuse + контракт серверов -------
-# M4: iomap (select у FUSE_FS), sysfs+kernfs (discovery-интерфейс серверов:
-# привязка device-id к uio_pci_generic идёт через /sys/bus/.../new_id)
 FS_KEEP="ramfs fuse iomap sysfs kernfs ext4 jbd2 proc"
 step_fs() {
     say "fs: из подкаталогов оставляю только: $FS_KEEP"
@@ -211,12 +173,6 @@ step_fs() {
     fix
 }
 
-# --- шаг 6: внутренности kernel/ и хост-утилиты -----------------------------
-# bpf/trace/cgroup/livepatch/power/kexec/gcov выключены конфигом или
-# переехали; kernel/events/ НЕ режем: в v7.2 PERF_EVENTS без промпта
-# (always-on), arch/x86/events — obj-y, perf-ядро — часть скелета.
-# tools/: в v7.2 CONFIG_OBJTOOL=y (mainline-дефолт), objtool нужен сборке —
-# оставляем его машинерию, хост-утилиты (perf, selftests и пр.) — под нож.
 TOOLS_KEEP="objtool build include scripts lib arch"
 step_kernel() {
     say "kernel: bpf, trace, cgroup, livepatch, power, kexec, gcov"
@@ -233,8 +189,6 @@ step_kernel() {
         [ "$keep" = 0 ] && rm -rf "$TREE/tools/$d"
     done
     fix
-    # шов: syscall-трейспойнты (CONFIG_HAVE_SYSCALL_TRACEPOINTS жил в
-    # вырезанном kernel/trace/Kconfig; в v7.2 определения уже здесь)
     python3 - "$TREE" <<'PYEOF'
 import sys
 p = sys.argv[1] + '/kernel/entry/syscall-common.c'

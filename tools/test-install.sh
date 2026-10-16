@@ -1,29 +1,5 @@
 #!/bin/sh
 # test-install.sh (M20/M22): MiLini как устанавливаемая ОС — e2e в пять бутов.
-# STAGE=a,a2,b,b2,c1,c2,d,d2 — посегментный прогон (TCG-песочницы без KVM:
-# один бут за вызов CI-джобы); без STAGE — все буты подряд.
-# бут A (live, -kernel): cmdline install=/dev/sda — GPT-таблица (ESP 64M +
-#   корень), BLKRRPART-рескан без ребута (ноды sda1/sda2 в devtmpfs),
-#   mkfs.ext4 на sda2, копия мира, extlinux.conf (root=/dev/sda2),
-#   extlinux --install, gptmbr.bin на LBA0, ESP = FAT16 с
-#   /EFI/BOOT/BOOTX64.EFI (наш EFI-лоадер) -> MINSTALL OK;
-# бут A2: переустановка с GUID'ами оператора (uuid_disk=/uuid_esp=/uuid_root=
-#   в cmdline) — парсер 8-4-4-4-12, эхо round-trip, случайный GUID вытеснен;
-# бут B (BIOS): SeaBIOS -> gptmbr -> extlinux (sda2) -> ядро + мини-initramfs
-#   -> switch_root -> login root/milin (sha512-crypt) -> root shell ->
-#   login user/user (setuid 1000) -> user shell -> poweroff (S5);
-# бут B2 (BIOS): passwd в госте — root меняет user без текущего пароля,
-#   вход user с новым паролем, self-смена через setuid (текущий -> новый x2),
-#   вход с паролем после self-смены -> poweroff (S5);
-# бут C1 (UEFI): OVMF, свежий vars — fallback-бут \EFI\BOOT\BOOTX64.EFI,
-#   лоадер создаёт boot-entry Boot0000 ("MiLin" -> \EFI\MILIN\BOOTX64.EFI)
-#   и первым номером в BootOrder, проверяет чтением назад -> NVRAM-маркер;
-# бут C2 (UEFI): тот же vars — прошивка грузит ЛОАДЕР ПО NVRAM-ENTRY
-#   (\EFI\MILIN\BOOTX64.EFI — лоадер узнаёт это по собственному device path);
-# бут D (UEFI secure boot): OVMF.secboot + PK/KEK/db в vars (virt-fw-vars),
-#   лоадер и ядро подписаны db (sbsign) — SecureBoot=1, всё грузится;
-# бут D2 (негативный): испорченный байт подписанного лоадера на ESP —
-#   прошивка обязана ОТКАЗАТЬ загрузку (в логе нет баннера лоадера).
 set -e
 cd "$(dirname "$0")/.."
 export PATH=/home/z/my-project/root/usr/bin:$PATH
@@ -55,18 +31,14 @@ DISK=build/install-disk.img
 
 FAIL=0
 
-# посегментный прогон: STAGE="a" | "a2" | "b" | "b2" | "c1" | "c2" | "d" | "d2"
-# или список через запятую; пусто — все буты подряд (как раньше)
 in_stage() {
     [ -z "$STAGE" ] && return 0
     case ",$STAGE," in *",$1,"*) return 0 ;; esac
     return 1
 }
 
-# состояние между сегментами: PUA (случайный GUID бута A), PUP (операторский A2)
 if [ -f build/install-state.sh ]; then . build/install-state.sh; fi
 
-# операторские GUID'ы гейта (домашний префикс MiLin 4d494c49-...)
 GU_DISK=4d494c49-4d20-4d32-8000-0000000000d1
 GU_ESP=4d494c49-4d20-4d32-8000-0000000000e2
 GU_ROOT=4d494c49-4d20-4d32-8000-0000000000a3
@@ -101,7 +73,6 @@ chk_a "BIOS-загрузчик gptmbr OK" "BIOS-путь: gptmbr.bin на LBA0"
 chk_a "ESP OK — BOOTX64.EFI + MILIN/BOOTX64.EFI + VMLINUZ.EFI + CMDLINE" "UEFI-путь: ESP FAT16 (лоадер x2 + ядро + cmdline)"
 chk_a "RESIZE OK" "resize2fs вырастил ext4 до края p2"
 
-# M22: уникальный PARTUUID установки — не канонический, форма 8-4-4-4-12
 canonical="4d494c49-4d20-4d32-8000-000000000001"
 PUA="$(echo "$LA" | sed -n 's/.*minstall: PARTUUID \([0-9a-f-]\{36\}\).*/\1/p' | head -1)"
 if [ -z "$PUA" ]; then
@@ -288,7 +259,6 @@ if in_stage c1; then
     chk_c "M19 LOGIN OK user=root" "login root после UEFI-загрузки OK"
     chk_c "M22 UEFI C1 OK" "UEFI root shell OK"
     chk_c "reboot: Power down" "poweroff S5 OK"
-    # NVRAM-перистентность на хосте: vars-файл обязан содержать entry
     if tr -d '\000' < build/install-ovmf-vars.fd | grep -q "MiLin" \
        && tr -d '\000' < build/install-ovmf-vars.fd | grep -q "Boot0000" \
        && tr -d '\000' < build/install-ovmf-vars.fd | grep -q "BootOrder"; then
@@ -333,7 +303,6 @@ else
     echo "== буты C1/C2 ПРОПУЩЕНЫ — нет OVMF.fd в тулчейне"
 fi
 
-# --- M22: secure boot (бут D) + негативный тест подписи (бут D2) ---
 OVMF_SEC=""
 for R in root ../root; do
     if [ -f "$R/usr/share/OVMF/OVMF_CODE_4M.secboot.fd" ]; then
@@ -405,8 +374,6 @@ fi  # in_stage d
 if in_stage d2; then
     echo "== бут D2: негативный — испорченный лоадер, прошивка обязана отказать"
     cp "$DISK" build/install-disk-bad.img
-    # XOR байта внутри .flat лоадера (первый кластер файла = сектор 2193,
-    # смещение 0x1000) — подпись больше не совпадает
     python3 -c "
 f = open('build/install-disk-bad.img', 'r+b')
 f.seek(2193 * 512 + 0x1000)
