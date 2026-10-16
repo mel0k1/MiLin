@@ -225,15 +225,17 @@ static int esp_put_file(long fd, long start_cl, const char *path) {
 
 // ESP: FAT16 без внешних тулов — все имена 8.3, LFN и загрузочного кода
 // не нужно (прошивка читает FAT своим драйвером).
-// M22: три файла в /EFI/BOOT — BOOTX64.EFI (наш EFI-лоадер), VMLINUZ.EFI
-// (ядро с EFI stub), CMDLINE (ascii-cmdline с root=PARTUUID установки).
-// Кластеры выдаются подряд: /EFI = 2, /EFI/BOOT = 3, файлы с 4; у каждого
-// файла своя цепочка FAT; каталоги одно-кластерные (EOF).
+// M22: /EFI/BOOT — BOOTX64.EFI (наш EFI-лоадер), VMLINUZ.EFI (ядро с EFI
+// stub), CMDLINE (ascii-cmdline с root=PARTUUID установки) + /EFI/MILIN —
+// второй BOOTX64.EFI (цель NVRAM boot-entry; та же цепочка кластеров —
+// прошивка ESP после установки не пишет, дублирование данных не нужно).
+// Кластеры подряд: /EFI = 2, /EFI/BOOT = 3, /EFI/MILIN = 4, файлы с 5;
+// у каждого файла своя цепочка FAT; каталоги одно-кластерные (EOF).
 // 64M = 131072 секторов: 1 BPB + 2 FAT по 32 + корень 32 + данные
 // по 16 секторов на кластер (8 КиБ).
 static int esp_write(const char *esp, const char *loader, const char *kern,
                      const char *cmdtext, u32 cmdlen) {
-    static u8 sec[512], fat[16384], dirc[8192], root[16384];
+    static u8 sec[512], fat[16384], dirc[8192], dirt[8192], root[16384];
     static u8 cl[8192];
 
     long lsz = file_size(loader);
@@ -242,8 +244,8 @@ static int esp_write(const char *esp, const char *loader, const char *kern,
     if (cmdlen == 0 || cmdlen > 8192) return 0;
     long nl = (lsz + 8191) / 8192;
     long nk = (ksz + 8191) / 8192;
-    if (2 + nl + nk + 1 > 8180) return 0;
-    long cl_loader = 4, cl_kern = 4 + nl, cl_cmd = 4 + nl + nk;
+    if (3 + nl + nk + 1 > 8180) return 0;
+    long cl_loader = 5, cl_kern = 5 + nl, cl_cmd = 5 + nl + nk;
 
     long fd = sys3(SYS_open, (long)esp, O_RDWR, 0);
     if (fd < 0) return 0;
@@ -275,6 +277,7 @@ static int esp_write(const char *esp, const char *loader, const char *kern,
     fat[2] = 0xFF; fat[3] = 0xFF;
     put16(fat + 2 * 2, 0xFFFF);
     put16(fat + 3 * 2, 0xFFFF);
+    put16(fat + 4 * 2, 0xFFFF);   // /EFI/MILIN: кластер 4 — одно-кластерный каталог (EOF)
     for (long i = 0; i < nl - 1; i++)
         put16(fat + (cl_loader + i) * 2, (u16)(cl_loader + i + 1));
     put16(fat + (cl_loader + nl - 1) * 2, 0xFFFF);
@@ -298,7 +301,26 @@ static int esp_write(const char *esp, const char *loader, const char *kern,
     m_memcpy(dirc + 64, "BOOT    ", 8);
     dirc[75] = 0x10;
     put16(dirc + 90, 3);
+    m_memcpy(dirc + 96, "MILIN   ", 8);
+    dirc[107] = 0x10;
+    put16(dirc + 122, 4);
     if (!write_at(fd, 97 * 512, dirc, 8192)) goto fail;
+
+    // /EFI/MILIN: цель NVRAM boot-entry — тот же лоадер (цепочка cl_loader)
+    m_memset(dirt, 0, sizeof(dirt));
+    dirt[0] = '.';
+    dirt[11] = 0x10;
+    put16(dirt + 26, 4);
+    dirt[32] = '.';
+    dirt[33] = '.';
+    dirt[43] = 0x10;
+    put16(dirt + 58, 2);
+    m_memcpy(dirt + 64, "BOOTX64 ", 8);
+    m_memcpy(dirt + 72, "EFI", 3);
+    dirt[75] = 0x20;
+    put16(dirt + 90, (u16)cl_loader);
+    put32(dirt + 92, (u32)lsz);
+    if (!write_at(fd, (97 + 2 * 16) * 512, dirt, 8192)) goto fail;
 
     m_memset(dirc, 0, sizeof(dirc));
     dirc[0] = '.';
@@ -765,7 +787,7 @@ void milin_main(void) {
         ldr = "/boot/vmlinuz";
     }
     if (esp_write(p1, ldr, "/boot/vmlinuz", append, (u32)k)) {
-        P("minstall: ESP OK — BOOTX64.EFI + VMLINUZ.EFI + CMDLINE\n");
+        P("minstall: ESP OK — BOOTX64.EFI + MILIN/BOOTX64.EFI + VMLINUZ.EFI + CMDLINE\n");
     } else {
         P("minstall: ESP FAIL — только BIOS\n");
     }
