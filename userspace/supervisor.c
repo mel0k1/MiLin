@@ -812,6 +812,10 @@ void milin_main(void) {
         P(" — установка\n");
     }
     struct svc *client = find_oneshot();
+    // install-сессия: манифестные oneshot'ы не спавнятся (done=1), вердикт —
+    // по minstall (последний в массиве), иначе клиентский статус всегда -1
+    if (install_dev[0] && nsvcs > 0)
+        client = &svcs[nsvcs - 1];
 
     // --- M9: kdriver-домен (root: sysfs placement требует привилегий) ---
     if (kd_demo()) {
