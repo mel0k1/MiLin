@@ -1,20 +1,4 @@
 // /sbin/gpud (M11/M22): user-placement GPU-демон — вторая инкарнация фасада.
-//
-// Пока домен держит amdgpu (placement=kernel), mlgpu-запросы обслуживает
-// kthread через /dev/amdgpu, а gpud на lane-запросы отвечает отказом
-// (ML_E_PERM) — двойного владения нет. Как только супервизор переводит
-// фасад в 'user', домен отклоняет /dev-операции (-ENODEV, M9), и протокол
-// обслуживает gpud: тот же wire-формат (userspace/mlgpu.h), те же ответы,
-// свой state. Где живёт запросный цикл, видно по /sys/class/mlkd/amdgpu/state
-// — gpud перечитывает его на каждый запрос и уступает дорогу домену.
-//
-// M22: lane может прийти с ареной bulk-слотов (ML_TR_BULK, 2 хука от шины:
-// lane + shm) — тогда SUBMITB несёт командный буфер в слоте: tail =
-// [op][submit_in], dwords в общей памяти, head h[0]=слот h[1]=байты.
-// Слот возвращается ДО ack (flow control, как LOG_WRITEB у log-сервера).
-//
-// Политика прав (M7): GPU — привилегированный ресурс, world не получает
-// lane вовсе (маска 0), root — полный.
 
 #include "milin.h"
 #include "ipc.h"
@@ -24,7 +8,6 @@
 #define GPU_WORLD 0
 #define GPU_ROOT  ML_CAP_WRITE
 
-// --- state фасада в user-placement: та же семантика, что в amdgpu-fac.c ---
 #define FAC_SLOTS 8
 #define FAC_SLOT_SIZE (1u << 20)
 #define FAC_HANDLE_MAGIC 0xfac00000ull
@@ -47,8 +30,6 @@ static int fac_slot_of(u64 handle) {
     return h < FAC_SLOTS ? (int)h : -1;
 }
 
-// обработать mlgpu-запрос: in = [op][payload], cmd/cmdlen — командный
-// буфер (bulk-слот либо NULL); ответ в out, длина или -код
 static long gpu_serve(const u8 *in, u32 inlen, const u8 *cmd, u32 cmdlen,
                       u8 *out, u32 outmax) {
     if (inlen < 1) return -1;
@@ -105,7 +86,6 @@ static long gpu_serve(const u8 *in, u32 inlen, const u8 *cmd, u32 cmdlen,
         if (s.ndw > FAC_MAX_DW || inlen != 1 + sizeof(s) + ndw * 4) return -1;
         int slot = fac_slot_of(s.handle);
         if (slot < 0 || !fst.used[slot]) return -1;
-        // эмуляция: проход по командному буферу
         u32 sum = 0;
         for (u32 i = 0; i < ndw; i++) {
             u32 dw;
@@ -118,8 +98,6 @@ static long gpu_serve(const u8 *in, u32 inlen, const u8 *cmd, u32 cmdlen,
         return sizeof(o);
     }
     case MLGPU_SUBMITB: {
-        // bulk (M22): dwords в арене, tail — только заголовок; сумма в ответе
-        // — клиент сверяет с локальной (байты реально прошли через shm)
         struct mlgpu_submit_in s;
         struct mlgpu_submitb_out o;
         if (!cmd) return -1;
@@ -155,7 +133,6 @@ static long gpu_serve(const u8 *in, u32 inlen, const u8 *cmd, u32 cmdlen,
     }
 }
 
-// фасад в домене? state = "user\n" — наш ход, иначе уступаем (-EPERM шине)
 static int placement_is_user(void) {
     long fd = sys3(SYS_open, (long)"/sys/class/mlkd/amdgpu/state", O_RDONLY, 0);
     if (fd < 0) return 0;
@@ -167,8 +144,6 @@ static int placement_is_user(void) {
     return m_strncmp(b, "user", 4) == 0;
 }
 
-// --- lane поверх SOCK_SEQPACKET: GPU_REQ -> GPU_REQ_R; с ареной (M22)
-// SUBMITB читает dwords прямо из общего слота, слот отдаёт ДО ack
 static void serve_lane(long lane, u32 rights, struct mlb_hdr *ar) {
     ml_passcred(lane);
     for (;;) {
@@ -183,7 +158,6 @@ static void serve_lane(long lane, u32 rights, struct mlb_hdr *ar) {
         }
         if (m.proto != ML_PROTO_GPU || m.msg_id != GPU_REQ) continue;
 
-        // bulk-ссылка: h[0]=слот, h[1]=байты; валидность — до любых ответов
         u32 slot = (u32)*ml_h(&m, 0);
         u32 blen = (u32)*ml_h(&m, 1);
         const u8 *cmd = 0;
@@ -205,7 +179,6 @@ static void serve_lane(long lane, u32 rights, struct mlb_hdr *ar) {
         if (!(rights & ML_CAP_WRITE)) {
             resp.err = ML_E_PERM;
         } else if (!placement_is_user()) {
-            // домен держит фасад — gpud не конкурирует с kthread'ом
             P("gpud: запрос отклонён: фасад в домене ядра (placement=kernel)\n");
             resp.err = ML_E_PERM;
         } else {
@@ -219,14 +192,11 @@ static void serve_lane(long lane, u32 rights, struct mlb_hdr *ar) {
                 resp.err = ML_E_IO;
             }
         }
-        // слот возвращаем ДО ack: писатель возьмёт следующий payload из
-        // той же арены (иначе flow-control дедлок, как в helq)
         if (cmd) mlb_give(ar, (int)slot);
         ml_send(lane, &resp, tail, resp.err == ML_E_OK ? resp.tail_len : 0, 0, 0);
     }
 }
 
-// коннект к шине + REGISTER "gpu.amdgpu" (перезапуск при смерти шины, M7.2)
 static long bus_register(void) {
     long bus = -1;
     for (int tries = 0; ; tries++) {
@@ -284,8 +254,6 @@ void milin_main(void) {
         if (m2.proto == ML_PROTO_BUS && m2.msg_id == BUS_LANE_REQ && aux.nhooks >= 1) {
             u32 rights = 0;
             if (m2.tail_len >= 4) m_memcpy(&rights, req_tail, 4);
-            // M22: ML_TR_BULK = 2 хука (lane + shm-арена); при отсутствии
-            // второго хука арена 0 — bulk-ссылки будут отбиты как ML_E_IO
             struct mlb_hdr *ar = 0;
             if (aux.nhooks >= 2 && aux.hooks[1] >= 0)
                 ar = mlb_map(aux.hooks[1]);

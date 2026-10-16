@@ -1,9 +1,4 @@
 // /sbin/poweroff + /sbin/reboot (M17): гейт ACPI через sys_reboot.
-// один исходник, два бинаря: -DML_REBOOT=1 собирает перезагрузку.
-// poweroff уходит в pm_power_off -> ACPI S5 (ядро печатает
-// "reboot: Power down", qemu завершается сам); reboot -> machine_restart
-// ("reboot: Restarting system", при -no-reboot qemu выходит).
-// если sys_reboot вернулся — ACPI-пути нет, гейт провален.
 
 #include "milin.h"
 
@@ -20,7 +15,6 @@ void milin_main(void) {
 #else
     P("acpipm: poweroff oneshot (S5)\n");
 #endif
-    // sys_reboot не синхронизирует — без sync хвост page cache теряется
     sys3(SYS_sync, 0, 0, 0);
 #ifdef ML_REBOOT
     sys6(SYS_reboot, RB_MAGIC1, RB_MAGIC2, RB_AUTOBOOT, 0, 0, 0);

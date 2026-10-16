@@ -1,40 +1,4 @@
 // /sbin/mlbus (M5 + M5.1): реестр серверов — идея mbus из Managarm.
-//
-// Единственная работа шины — рандеву:
-//   * сервер: RegisterRequest{имя} и остаётся на связи;
-//   * клиент: LookupRequest{имя} -> шина создаёт lane и раздаёт концы:
-//     клиенту LookupResponse{hooks:[lane]}, серверу LaneRequest.
-// Дальше клиент и сервер общаются напрямую, шина данных не видит.
-// Хэндлы (fd) передаются SCM_RIGHTS — как hooks в bragi.
-//
-// Шина — однопоточный event loop на poll(): слушатель + все соединения.
-// Так клиентский LOOKUP, пришедший РАНЬШЕ регистрации сервера, честно
-// получает NO_SUCH_ENTITY и повторяет попытку, а шина тем временем
-// принимает REGISTER. Последовательный accept-цикл здесь давал
-// живую блокировку: шина сидела в чтении клиента и не могла принять
-// сервер (M5-баг, всплыл на M5.1).
-//
-// M5.1 (creds): шина слушает с SO_PASSCRED — ядро прикладывает к каждому
-// сообщению struct ucred (pid/uid/gid), подделать их нельзя. При LOOKUP
-// creds клиента уезжают серверу в LaneRequest — сервер знает, кто к нему
-// постучался (в Managarm личность клиента знает ядро, здесь — шина).
-// Лane'овые socketpair'ы тоже размечаются: SO_PASSCRED на оба конца ДО
-// раздачи, иначе первое сообщение приходит с мусорными creds.
-//
-// M5.1 (helq): клиент может попросить транспорт ML_TR_HELQ — тогда шина
-// дополнительно создаёт файл в /tmp (ramfs), размечает в нём пару
-// асинхронных очередей HelQueue (userspace/helq.h), мапит, раздаёт fd
-// обоим концам и unlink'ает: объект живёт, пока живы маппинги —
-// классические shm-семантики без CONFIG_TMPFS/CONFIG_MEMFD.
-//
-// M7 (capabilities): шина — точка выдачи прав. Сервер при REGISTER
-// объявляет политику (tail: маски world/root), шина сверяет uid клиента
-// (kernel-верифицированный, SO_PASSCRED) и выдаёт lane только если
-// права непусты; маска уезжает клиенту (LookupResponse) и серверу
-// (LaneRequest tail). Нет прав — нет lane'а. Права сервера шина
-// считает доверенными: сервер — TCB, его uid шина знает от ядра.
-// Мёртвый сервер с непочищенным именем: LaneRequest уходит ПЕРВЫМ и
-// EPIPE на нём честно превращается в NO_SUCH_ENTITY клиенту.
 
 #include "milin.h"
 #include "ipc.h"
@@ -44,8 +8,6 @@
 #define MAXREG    8
 #define MAXCLIENT 8
 
-// --- poll: единственный мультиплексор, который остался в ядре (EPOLL
-// вырезан ещё в M2); sys_poll живёт в fs/select.c, всегда в сборке ---
 struct pollfd {
     int fd;
     short events;
@@ -64,10 +26,6 @@ struct reg {
 
 static struct reg regs[MAXREG];
 
-// --- M7.1: журнал выданных capabilities ---
-// шина выдала lane клиенту (по conn её LOOKUP) на сервере — пока клиент
-// жив, права в силе; умер (EOF на его конне к шине) — шина шлёт серверу
-// REVOKE. Ключ — conn: у процесса может быть несколько коннов (форки).
 #define MAXCAP 16
 struct issued {
     int used;
@@ -77,8 +35,6 @@ struct issued {
 };
 static struct issued issued_caps[MAXCAP];
 
-// одна запись на пару (клиент, сервер): сервер отзывает по pid сразу все
-// lane'ы этого клиента, дубликаты не нужны
 static void cap_add(long client, u32 pid, long server) {
     for (int i = 0; i < MAXCAP; i++)
         if (issued_caps[i].used && issued_caps[i].client == client
@@ -96,7 +52,6 @@ static void cap_add(long client, u32 pid, long server) {
         }
 }
 
-// клиент умер: его права отзывает владелец (шина), сервер только enforced'ит
 static void cap_revoke_client(long client) {
     for (int i = 0; i < MAXCAP; i++) {
         if (!issued_caps[i].used || issued_caps[i].client != client) continue;
@@ -110,7 +65,6 @@ static void cap_revoke_client(long client) {
     }
 }
 
-// сервер умер: его записи в журнале прав больше не имеют силы
 static void cap_drop_server(long server) {
     for (int i = 0; i < MAXCAP; i++)
         if (issued_caps[i].used && issued_caps[i].server == server)
@@ -131,7 +85,6 @@ static struct reg *reg_by_name(const char *name) {
     return 0;
 }
 
-// таблица poll: [0] = слушатель, дальше conn'ы клиентов и серверов
 static struct pollfd pfds[1 + MAXREG + MAXCLIENT];
 static int npfd = 1;
 
@@ -152,7 +105,6 @@ static void pfd_del(long fd) {
     }
 }
 
-// создать shm-файл с размеченной парой очередей; вернуть fd (-1 = ошибка)
 static int make_helq_region(int seq) {
     char path[32] = "/tmp/mlq-";
     int n = 9;
@@ -170,7 +122,6 @@ static int make_helq_region(int seq) {
         P(": open FAIL\n");
         return -1;
     }
-    // размер через запись нулей (ftruncate на ramfs не проверяли)
     static char zero[4096];
     m_memset(zero, 0, sizeof(zero));
     long left = MLQ_SIZE;
@@ -191,17 +142,12 @@ static int make_helq_region(int seq) {
         return -1;
     }
     mlq_init(p);
-    // munmap: страница вернётся, fd уже размечен; mmap у адресатов создастся заново
     sys6(SYS_munmap, (long)p, MLQ_SIZE, 0, 0, 0, 0);
     return (int)fd;
 }
 
-// суффикс последнего созданного региона (для unlink после раздачи)
 static char last_path[32];
 
-// M22: арена bulk-слотов — та же shm-семантика, что у helq-региона:
-// файл в /tmp нужен только на момент раздачи fd, дальше объект живёт
-// в памяти, пока живы маппинги адресатов
 static int make_bulk_region(int seq) {
     char path[32] = "/tmp/mlb-";
     int n = 9;
@@ -245,7 +191,6 @@ static int make_bulk_region(int seq) {
 
 static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     const char *name = m->head;
-    // transport в head-слоте 2 (слот 0-1 занимает имя, см. lookup_log)
     int transport = (int)*ml_h(m, 2);
     if (!ml_name_ok(name)) return;
     struct reg *r = reg_by_name(name);
@@ -259,8 +204,6 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         return;
     }
 
-    // M7: адмиссионный контроль — uid подтверждён ядром (SO_PASSCRED),
-    // права выбираются из политики сервера; uid 0 — привилегированный
     u32 uid = aux && aux->has_cred ? aux->cred.uid : 0;
     u32 rights = (uid == 0) ? r->root : r->world;
     if (!rights) {
@@ -274,11 +217,6 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         return;
     }
 
-    // socketpair: [0] -> клиенту, [1] -> серверу. После отправки оба
-    // конца живут у адресатов, шина свои копии закрывает.
-    // SO_PASSCRED ставим ПРЯМО ЗДЕСЬ, на оба конца, до раздачи: флаг
-    // принятому через SCM_RIGHTS сокету не «доезжает» сам, а без него
-    // первое сообщение сервер получает с мусорными creds (unmapped uid).
     int sv[2];
     if (ml_socketpair(sv) < 0) {
         struct ml_msg resp = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_IO, 0, {0} };
@@ -288,7 +226,6 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     ml_passcred(sv[0]);
     ml_passcred(sv[1]);
 
-    // helq-очереди или bulk-арена: shm-регион, fd -> оба конца
     static int seq = 1;
     int arena = -1;
     if (transport == ML_TR_HELQ) {
@@ -326,14 +263,8 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         return;
     }
 
-    // creds клиента: ядро приложило их само (SO_PASSCRED), шина честно
-    // пересылает серверу — сервер знает, кто стучится
     u32 pid = aux && aux->has_cred ? aux->cred.pid : 0;
 
-    // M7: LaneRequest уходит ПЕРВЫМ, права серверу — в tail (маска).
-    // Порядок важен: если сервер уже мёртв (SIGKILL, имя ещё не
-    // подчистено), sendmsg вернёт EPIPE и клиент получит честную ошибку
-    // вместо lane'а в никуда.
     struct ml_msg rs = { ML_PROTO_BUS, BUS_LANE_REQ, ML_E_OK, 0, {0} };
     *ml_h(&rs, 0) = pid;
     *ml_h(&rs, 1) = uid;
@@ -356,8 +287,6 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         return;
     }
 
-    // LookupResponse клиенту: права — в head-слоте 0 (клиент знает,
-    // ЧТО ему разрешено на этом lane'е)
     struct ml_msg rc = { ML_PROTO_BUS, BUS_LOOKUP_R, ML_E_OK, 0, {0} };
     *ml_h(&rc, 0) = rights;
     if (arena >= 0)
@@ -368,11 +297,8 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
     sys3(SYS_close, sv[0], 0, 0);
     sys3(SYS_close, sv[1], 0, 0);
     if (arena >= 0) {
-        // unlink после раздачи: объект живёт в памяти, пока живы маппинги
-        // (в M2 tmpfs вырезан, имя в /tmp нам больше не нужно)
         sys3(SYS_unlink, (long)last_path, 0, 0);
     }
-    // M7.1: lane выдан — фиксируем в журнале прав (отзыв — по смерти клиента)
     cap_add(client, pid, r->conn);
     P("mlbus: lookup ");
     print_str(name);
@@ -386,7 +312,6 @@ static void serve_lookup(struct ml_msg *m, long client, struct ml_aux *aux) {
         P("\n");
 }
 
-// обработать одно сообщение с соединения; 1 = conn жив, 0 = закрыт
 static int bus_msg(long c) {
     struct ml_msg m;
     char tail[ML_MAXTAIL];
@@ -395,7 +320,6 @@ static int bus_msg(long c) {
     if (r <= 0) return 0;
 
     if (m.proto == ML_PROTO_BUS && m.msg_id == BUS_REGISTER) {
-        // имя обязано быть NUL-terminated в пределах head — иначе не имя
         if (!ml_name_ok(m.head)) return 1;
         if (reg_by_name(m.head)) {
             P("mlbus: register ");
@@ -405,13 +329,10 @@ static int bus_msg(long c) {
             ml_send(c, &resp, 0, 0, 0, 0);
             return 1;
         }
-        // M7: политика прав обязательна — tail = { world, root } (u32 x2)
         u32 masks[2] = { 0, 0 };
         if (m.tail_len >= sizeof(masks))
             m_memcpy(masks, tail, sizeof(masks));
         if (!masks[0] && !masks[1]) {
-            // сервер не объявил права ни для кого — регистрируем, но
-            // ни один LOOKUP не пройдёт (fail-closed)
             P("mlbus: register ");
             print_str(m.head);
             P(": БЕЗ политики — lookup'ы будут отклонены\n");
@@ -447,7 +368,6 @@ static int bus_msg(long c) {
         return 1;
     }
     if (m.proto == ML_PROTO_BUS && m.msg_id == BUS_WHEREIS) {
-        // M7: pid сервера по имени — личность из creds при REGISTER
         if (!ml_name_ok(m.head)) return 1;
         struct reg *r = reg_by_name(m.head);
         if (!r) {
@@ -470,9 +390,6 @@ static int bus_msg(long c) {
 }
 
 void milin_main(void) {
-    // M7.2: наименьшие привилегии — шине не нужен root (bind абстрактный,
-    // shm в /tmp с 0777). Заодно клиент того же uid может убить её в демо
-    // каскада — kill разрешён между процессами одного uid
     if (sys3(SYS_setuid, 1000, 0, 0) != 0) {
         P("mlbus: setuid(1000): FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
@@ -482,7 +399,6 @@ void milin_main(void) {
         P("mlbus: bind @milin-bus: FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
     }
-    // M5.1: ядро прикладывает к сообщениям creds отправителя
     if (ml_passcred(lane) != 0) {
         P("mlbus: SO_PASSCRED: FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
@@ -498,7 +414,6 @@ void milin_main(void) {
         long r = sys3(SYS_poll, (long)pfds, npfd, -1);
         if (r <= 0) continue;
 
-        // новые соединения
         if (pfds[0].revents & POLLIN) {
             long c = ml_accept(lane);
             if (c >= 0) {
@@ -511,13 +426,10 @@ void milin_main(void) {
             }
         }
 
-        // сообщения с соединений; pfd_del меняет хвост таблицы —
-        // поэтому идём с конца, чтобы swap-remove не пропускал элементы
         for (int i = npfd - 1; i >= 1; i--) {
             if (!(pfds[i].revents & POLLIN)) continue;
             long c = pfds[i].fd;
             if (!bus_msg(c)) {
-                // соединение закрыто: если это был сервер — убираем из реестра
                 struct reg *r = reg_by_conn(c);
                 sys3(SYS_close, c, 0, 0);
                 pfd_del(c);
@@ -528,7 +440,6 @@ void milin_main(void) {
                     print_str(r->name);
                     P("\" отвалился, имя освобождено\n");
                 } else {
-                    // M7.1: умер не сервер, а клиент — его права отозвать
                     cap_revoke_client(c);
                 }
             }

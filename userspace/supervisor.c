@@ -1,35 +1,9 @@
 // /init MiLin (M5.2): супервизор на сервисных манифестах.
-//
-// M4: порождает серверы (execve), отдаёт им железо (UIO) и ФС (FUSE),
-//     непривилегированный клиент читает файл с FUSE-сервера.
-// M5: серверы не сироты — у них есть шина (mlbus, идея mbus из Managarm).
-// M5.1: второй транспорт — асинхронные очереди HelQueue в разделяемой памяти.
-// M7: capability-модель на lane'ах и отказоустойчивость: wait4(-1) на
-//     любого ребёнка, павший сервис перезапускается с нарастающей паузой.
-// M8: blob-путь для больших сообщений; glibc-клиент в userspace.
-// M9: kdriver-домен — драйвер «между ядром и userspace».
-// M11: mlkd-фасад amdgpu — протокол mlgpu, placement user/kernel.
-// M5.2: таблица сервисов больше не зашита в код: /etc/milin/*.svc —
-//     манифесты (name/exec/type/stop/order). Супервизор читает их
-//     getdents64'ом, сортирует по order и порождает: служба = файл,
-//     супервизор не пересобирается. Демо-клиент уехал из супервизора
-//     в отдельный бинарник /sbin/client (oneshot в манифестах) — все
-//     процессы равны перед манифестами.
-//
-//   супервизор  /init        — интерпретатор манифестов + reaper
-//   реестр      /sbin/mlbus  — именованные lane'и (mbus) + права (M7)
-//   log-сервер  /sbin/logsrv — сервис, принимающий сообщения
-//   драйвер     /sbin/uiod   — UIO: userspace-драйвер PCI-устройства
-//   фс-сервер   /sbin/fused  — FUSE: файловая система в userspace
-//   клиент      /sbin/client — IPC-демо + capability + отказ-инъекция
 
 #include "milin.h"
 #include "ipc.h"
 #include "mlgpu.h"
 
-// --- манифест сервиса (/etc/milin/*.svc) ---
-// name=имя в логах, exec=путь, type=service|oneshot,
-// stop=term|umount (как супервизор его глушит), order=порядок старта
 #define SVC_SERVICE 0
 #define SVC_ONESHOT 1
 #define SVC_STOP_TERM   0
@@ -54,9 +28,6 @@ struct svc {
 static struct svc svcs[SVC_MAX];
 static int nsvcs;
 
-// M19: установленная система (нет /init) не завершается после oneshot'ов;
-// install=<диск> в cmdline запускает инсталлятор oneshot'ом, uuid_*= —
-// операторские GUID'ы GPT (миновают urandom, уходят в argv minstall)
 static int g_installed;
 static char install_dev[64];
 static char uuid_disk[44];
@@ -79,7 +50,6 @@ static void copy_field(char *dst, const char *val, int max) {
     dst[i] = 0;
 }
 
-// одну строку манифеста: key=value
 static void parse_line(struct svc *s, const char *key, const char *val) {
     if (m_strncmp(key, "name", 5) == 0)
         copy_field(s->name, val, sizeof(s->name));
@@ -170,7 +140,6 @@ static void load_manifests(void) {
     sys3(SYS_close, fd, 0, 0);
 }
 
-// порядок старта задаёт order, не readdir
 static void sort_svcs(void) {
     for (int i = 1; i < nsvcs; i++) {
         struct svc s = svcs[i];
@@ -194,8 +163,6 @@ static struct svc *find_oneshot(void) {
     return 0;
 }
 
-// сессия закончена, когда завершились ВСЕ oneshot'ы (не только первый):
-// демо-клиенты M5.2/M12 идут отдельными oneshot'ами в общем порядке
 static int all_oneshots_done(void) {
     for (int i = 0; i < nsvcs; i++)
         if (svcs[i].type == SVC_ONESHOT && !svcs[i].done)
@@ -250,11 +217,6 @@ static int svc_alive_count(void) {
     return n;
 }
 
-// --- M9: kdriver-домен: драйвер «между ядром и userspace» ---
-// /dev/kdemo: write = запрос, read = ответ; обрабатывает не syscall-контекст,
-// а kthread домена (ring 0, свой pid). Размещение — политика: 'user' через
-// sysfs отдаёт драйвер userspace-серверу (UIO-путь), домен отклоняет запросы
-// (-ENODEV); 'kernel' возвращает драйвер в домен.
 static char kd_rbuf[256];
 
 static int kd_demo(void) {
@@ -264,7 +226,6 @@ static int kd_demo(void) {
         return 1;
     }
 
-    // эхо: запрос уезжает в домен и обрабатывается его kthread'ом
     const char *req = "Ekdriver: echo через домен ядра";
     long n = m_strlen(req);
     if (sys3(SYS_write, fd, (long)req, n) != n) {
@@ -278,7 +239,6 @@ static int kd_demo(void) {
     }
     P("kdriver: /dev/kdemo открыт, echo через домен ядра: OK\n");
 
-    // счётчик: 'C' -> u32 LE; состояние живёт в kthread'е домена
     for (u32 i = 1; i <= 2; i++) {
         if (sys3(SYS_write, fd, (long)"C", 1) != 1) {
             P("kdriver: write (counter): FAIL\n");
@@ -298,7 +258,6 @@ static int kd_demo(void) {
     }
     P("kdriver: счётчик домена 1 -> 2 (state живёт в kthread'е): OK\n");
 
-    // инфо: pid kthread'а виден userspace — обработка не в syscall-контексте
     if (sys3(SYS_write, fd, (long)"I", 1) != 1 ||
         sys3(SYS_read, fd, (long)kd_rbuf, sizeof(kd_rbuf) - 1) <= 0) {
         P("kdriver: info FAIL\n");
@@ -308,7 +267,6 @@ static int kd_demo(void) {
     print_str(kd_rbuf);
     P("\n");
 
-    // размещение на лету: 'user' — драйвер отдан userspace-серверу
     long pf = sys3(SYS_open, (long)"/sys/class/mlkd/kdemo/placement", O_WRONLY, 0);
     if (pf < 0 || sys3(SYS_write, pf, (long)"user\n", 5) != 5) {
         P("kdriver: placement=user: FAIL\n");
@@ -321,7 +279,6 @@ static int kd_demo(void) {
     }
     P("kdriver: placement=user: домен отклоняет запросы (-ENODEV): OK\n");
 
-    // 'kernel' — драйвер снова в домене
     pf = sys3(SYS_open, (long)"/sys/class/mlkd/kdemo/placement", O_WRONLY, 0);
     if (pf < 0 || sys3(SYS_write, pf, (long)"kernel\n", 7) != 7) {
         P("kdriver: placement=kernel: FAIL\n");
@@ -342,12 +299,6 @@ static int kd_demo(void) {
     return 0;
 }
 
-// --- M15: switch_root на постоянный ext4 (cmdline root=) ---
-// /init есть только в initramfs — его отсутствие = мы уже на реальном
-// корне (guard от повторного переезда у нового /sbin/init).
-// Путь: root= из /proc/cmdline -> mount ext4 -> пустой? сеем копию мира
-// (installer-примитив) -> move /dev /sys /proc -> mount --move / -> chroot
-// -> exec /sbin/init. Диск/корень не годятся — остаёмся в initramfs.
 
 struct mstat {
     u64 dev, ino, nlink;
@@ -363,7 +314,6 @@ static int m_stat(const char *p, struct mstat *st) {
     return r == 0;
 }
 
-// lstat: не следовать симлинкам — copytree сохраняет их как есть
 static int m_lstat(const char *p, struct mstat *st) {
     m_memset(st, 0, sizeof(*st));
     long r = sys3(SYS_lstat, (long)p, (long)st, 0);
@@ -427,7 +377,6 @@ static void copytree(const char *src, const char *dst, int depth) {
     if (depth > 8) return;
     long fd = sys3(SYS_open, (long)src, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) return;
-    // СТРОГО локальный буфер: рекурсия из copy_entry заменила бы статический
     char dbuf[16384];
     for (;;) {
         long n = sys3(SYS_getdents64, fd, (long)dbuf, sizeof(dbuf));
@@ -444,7 +393,6 @@ static void copytree(const char *src, const char *dst, int depth) {
     sys3(SYS_close, fd, 0, 0);
 }
 
-// верхний уровень: белые списки — внутри всё, снаружи ничего
 static const char *seed_dirs[] = { "bin", "etc", "lib", "lib64", "root",
                                    "sbin", "tmp", "usr", "var", 0 };
 
@@ -456,16 +404,10 @@ static void seed_root(void) {
     sys3(SYS_mkdir, (long)"/newroot/proc", 0755, 0);
     sys3(SYS_mkdir, (long)"/newroot/sys", 0755, 0);
     sys3(SYS_mkdir, (long)"/newroot/dev", 0755, 0);
-    // /init -> /sbin/init: реальный корень живёт без initramfs-/init
     copy_file("/init", "/newroot/sbin/init");
     P("supervisor: SEED OK\n");
 }
 
-// --- M22: PARTUUID -> устройство ---
-// mount(2) имена PARTUUID не понимает: mini-initramfs монтирует корень
-// сам. Сканируем /dev, у каждого дискового узла читаем GPT (LBA1:
-// заголовок + записи) и ищем партицию с этим уникальным GUID — тот же
-// разбор, что и в ядре (init/do_mounts.c), но в userspace.
 
 static int hexval(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -474,7 +416,6 @@ static int hexval(char c) {
     return -1;
 }
 
-// "8-4-4-4-12" -> 16 дисковых байт (первые три поля little-endian)
 static int guid_parse(const char *s, u8 out[16]) {
     int f = 0;
     while (*s && f < 16) {
@@ -492,7 +433,6 @@ static int guid_parse(const char *s, u8 out[16]) {
     return f == 16 && *s == 0;
 }
 
-// дисковый узел (не партиция): sd/hd/vd? | nvme?n? | mmcblk?
 static int disk_node_name(const char *s) {
     int n = 0;
     while (s[n]) n++;
@@ -509,7 +449,6 @@ static int disk_node_name(const char *s) {
     return 0;
 }
 
-// номер партиции диска с GUID want (0 = не нашлась)
 static long gpt_find_part(const char *devname, const u8 want[16]) {
     static u8 lba1[512], ent[16384];
     char path[64];
@@ -553,7 +492,6 @@ static long gpt_find_part(const char *devname, const u8 want[16]) {
     return 0;
 }
 
-// PARTUUID -> имя узла партиции (/dev/sda2, /dev/nvme0n1p2, ...)
 static int partuuid_resolve(const char *hex, char *out, int omax) {
     u8 want[16];
     if (!guid_parse(hex, want)) return 0;
@@ -572,7 +510,6 @@ static int partuuid_resolve(const char *hex, char *out, int omax) {
             if (!disk_node_name(e->d_name)) continue;
             long pn = gpt_find_part(e->d_name, want);
             if (pn <= 0) continue;
-            // полный путь: mount(2) хочет "/dev/<узел>"
             int a = 0;
             for (const char *d = "/dev/"; *d; d++) out[a++] = *d;
             int b = 0;
@@ -595,9 +532,6 @@ static int partuuid_resolve(const char *hex, char *out, int omax) {
 }
 
 static void cmdline_root(char *out, int max) {
-    // /proc/cmdline: "root=/dev/vda1 console=..."; последний root=
-    // выигрывает — та же семантика, что и у ядра (bootloader-приложение
-    // перекрывает встроенный cmdline)
     sys3(SYS_mkdir, (long)"/proc", 0555, 0);
     if (sys5(SYS_mount, (long)"proc", (long)"/proc", (long)"proc", 0, 0) != 0)
         return;
@@ -665,7 +599,6 @@ static void try_switch_root(void) {
     cmdline_root(rootdev, sizeof(rootdev));
     if (!rootdev[0]) return;
 
-    // M22: root=PARTUUID=... -> узел в /dev (уникальный GUID установки)
     if (m_strncmp(rootdev, "PARTUUID=", 9) == 0) {
         char node[64];
         if (!partuuid_resolve(rootdev + 9, node, sizeof(node))) {
@@ -699,7 +632,6 @@ static void try_switch_root(void) {
 
     struct mstat st;
     if (!m_stat("/newroot/sbin/init", &st)) {
-        // пустой/нераспакованный корень: сеем копию мира (installer)
         seed_root();
         if (!m_stat("/newroot/sbin/init", &st)) {
             P("supervisor: seed не удался — остаюсь в initramfs\n");
@@ -707,7 +639,6 @@ static void try_switch_root(void) {
             return;
         }
     } else {
-        // уже сеянный корень: только монт-пойнты
         sys3(SYS_mkdir, (long)"/newroot/mnt", 0755, 0);
     }
     do_switch_root();
@@ -716,8 +647,6 @@ static void try_switch_root(void) {
 void milin_main(void) {
     P("MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)\n");
 
-    // /init есть только в initramfs; маркер /etc/milin/.installed ставит
-    // minstall — установленная система не завершается после oneshot'ов
     g_installed = 0;
     {
         long f = sys3(SYS_open, (long)"/init", O_RDONLY, 0);
@@ -732,32 +661,20 @@ void milin_main(void) {
         }
     }
 
-    // devtmpfs: /dev/fuse и /dev/uio0 появляются сами (UIO берёт
-    // динамический major, узнаваемый только через devtmpfs)
     if (sys5(SYS_mount, (long)"devtmpfs", (long)"/dev", (long)"devtmpfs", 0, 0) == 0) {
         P("supervisor: devtmpfs смонтирован на /dev\n");
     } else {
-        // запасной путь: /dev/fuse — misc 10:229 (фиксированный minor)
         sys3(SYS_mknod, (long)"/dev/fuse", 0600 | 0020000, (10 << 8) | 229);
         P("supervisor: devtmpfs нет, /dev/fuse создан mknod\n");
     }
 
-    // Сборка системы супервизором: uio_pci_generic сознательно не имеет
-    // таблицы device-id — супервизор сам решает, какое железо отдаётся
-    // userspace-драйверу (1b36:0005 = qemu pci-testdev).
-    // sysfs монтируем как discovery-интерфейс серверов.
     sys3(SYS_mkdir, (long)"/sys", 0755, 0);
     long sysfs_ok = sys5(SYS_mount, (long)"sysfs", (long)"/sys", (long)"sysfs", 0, 0);
     if (sysfs_ok == 0) P("supervisor: sysfs смонтирован\n");
 
-    // /tmp под shm-регионы очередей (ramfs: имя нужно только на момент
-    // раздачи fd, после unlink объект живёт в памяти). chown: шина после
-    // setuid(1000) (M7.2) создаёт там регионы, а mkdir режется umask'ом
     sys3(SYS_mkdir, (long)"/tmp", 0777, 0);
     sys3(SYS_chown, (long)"/tmp", 1000, 1000);
 
-    // PCI -> UIO: список пар "vendor device" из /etc/milin/pci.ids
-    // (по строке на устройство); файла нет — дефолт qemu pci-testdev
     long bfd = sys3(SYS_open, (long)"/sys/bus/pci/drivers/uio_pci_generic/new_id", O_WRONLY, 0);
     if (bfd >= 0) {
         long ids = sys3(SYS_open, (long)"/etc/milin/pci.ids", O_RDONLY, 0);
@@ -791,8 +708,6 @@ void milin_main(void) {
         P("supervisor: sysfs недоступен, UIO-привязка невозможна\n");
     }
 
-    // --- M15: root= из cmdline -> постоянный ext4 -> exec /sbin/init ---
-    // (не возвращается при успехе; без root= или с плохим диском — дальше)
     try_switch_root();
 
     cmdline_val("install=", 8, install_dev, sizeof(install_dev));
@@ -800,13 +715,11 @@ void milin_main(void) {
     cmdline_val("uuid_esp=", 9, uuid_esp, sizeof(uuid_esp));
     cmdline_val("uuid_root=", 10, uuid_root, sizeof(uuid_root));
 
-    // --- сервисы: из манифестов, в порядке order ---
     load_manifests();
     sort_svcs();
     P("supervisor: манифестов: ");
     print_dec_n(nsvcs);
     P("\n");
-    // install= : сессия установки — сервисы + инсталлятор, без демо-oneshot'ов
     for (int i = 0; i < nsvcs; i++) {
         struct svc *s = &svcs[i];
         if (install_dev[0] && s->type == SVC_ONESHOT) {
@@ -834,28 +747,20 @@ void milin_main(void) {
         P(" — установка\n");
     }
     struct svc *client = find_oneshot();
-    // install-сессия: манифестные oneshot'ы не спавнятся (done=1), вердикт —
-    // по minstall (последний в массиве), иначе клиентский статус всегда -1
     if (install_dev[0] && nsvcs > 0)
         client = &svcs[nsvcs - 1];
 
-    // --- M9: kdriver-домен (root: sysfs placement требует привилегий) ---
     if (kd_demo()) {
         P("M9 FAILED\n");
         sys3(SYS_exit, 1, 0, 0);
     }
 
-    // --- reaper: wait4(-1) на любого ребёнка ---
-    // M22: GPU-фасад e2e ведёт /sbin/gputest (oneshot): kernel/user
-    // placement — политика клиента, /init placement не трогает
     int client_status = -1;
     for (;;) {
         int status = 0;
-        // r10/r8 обязаны быть чистыми: мусор ядро читает как rusage (M4)
         long r = sys5(SYS_wait4, -1, (long)&status, 0, 0, 0);
         if (r < 0) break; // детей больше нет
         if (client && r == client->pid) {
-            // статус первого oneshot — для итоговой строки "клиент: OK"
             client_status = status;
         }
         struct svc *s = find_svc((int)r);
@@ -866,18 +771,13 @@ void milin_main(void) {
         }
 
         if (s->stopping) {
-            // запланированная остановка — норма graceful shutdown
             s->stopped = 1;
         } else if (s->type == SVC_ONESHOT) {
-            // oneshot закончил работу; в initramfs-сессии система завершается,
-            // когда завершатся ВСЕ (демо-клиенты M5.2/M12 — отдельные oneshot'ы);
-            // установленная система живёт дальше (getty держит вход, M19)
             if (all_oneshots_done()) {
                 if (!g_installed) break;
                 continue;
             }
         } else {
-            // нежданная смерть сервиса: перезапуск с нарастающей паузой
             if (s->restarts >= MAX_RESTARTS) {
                 P("supervisor: ");
                 print_str(s->name);
@@ -910,13 +810,9 @@ void milin_main(void) {
         }
     }
 
-    // --- graceful shutdown: остановить оставшиеся сервисы ---
     for (int i = 0; i < nsvcs; i++)
         if (!svcs[i].stopped) svcs[i].stopping = 1;
 
-    // остановка по манифесту: stop=umount — размонтирование закрывает
-    // /dev/fuse, сервер видит EOF и выходит сам; stop=term — SIGTERM
-    // тем, кто спит в poll/recv
     int umounted = 0;
     for (int i = 0; i < nsvcs; i++) {
         struct svc *s = &svcs[i];
@@ -929,7 +825,6 @@ void milin_main(void) {
         }
     }
 
-    // допросить всех: в фазе остановки любой статус — норма
     while (svc_alive_count() > 0) {
         int status = 0;
         long r = sys5(SYS_wait4, -1, (long)&status, 0, 0, 0);
@@ -944,8 +839,6 @@ void milin_main(void) {
     P("supervisor: клиент: ");
     if (client_ok) P("OK\n"); else P("FAIL\n");
 
-    // M22: вердикт фасада — по статусу oneshot'а gputest (в установленной
-    // системе /init тоже placement не трогает — один владелец)
     int gpu_ok = 0;
     for (int i = 0; i < nsvcs; i++)
         if (m_strncmp(svcs[i].name, "gputest", 8) == 0 && svcs[i].done
@@ -975,7 +868,6 @@ void milin_main(void) {
         }
         P("M11 OK: mlkd amdgpu facade — one protocol, user/kernel placement\n");
         P("M22 OK: gpu facade e2e — dev/lane cycles + deny paths (cap/placement)\n");
-        // M10: amdgpu в ядре виден как built-in модуль в /sys/module/amdgpu
         {
             long fd = sys3(SYS_open, (long)"/sys/module/amdgpu", 0, 0);
             if (fd >= 0) {

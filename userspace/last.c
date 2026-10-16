@@ -1,6 +1,4 @@
-// /sbin/last (M21): читает /var/log/wtmp (glibc-совместимый формат utmp,
-// 384 байта на запись), печатает USER_PROCESS/DEAD_PROCESS и маркер с числом
-// входов. файл отсутствует или входов нет — ошибка.
+// last (M21): читает /var/log/wtmp (glibc-формат utmp), печатает USER_PROCESS/DEAD_PROCESS.
 
 #include "milin.h"
 #include "utmp.h"

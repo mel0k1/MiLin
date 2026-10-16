@@ -1,7 +1,4 @@
-// netsh.so (M12): socket-шима поверх MiLin IPC. LD_PRELOAD для
-// динамического xbps: socket/connect/send/recv/close уезжают в сервис
-// "net0" (netd) lane'ом по шине, poll/read ждут push'ей NET_DATA.
-// Микроядро честно: ни одного socket-сисколла ядру про TCP — только IPC.
+// netsh.so (M12): LD_PRELOAD-шима сокетов — динамический xbps ходит через сервис net0.
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -23,7 +20,6 @@
 #include <time.h>
 #include <unistd.h>
 
-// --- wire: зеркало userspace/mlproto.h (glibc-мир, свои typedef'ы) ---
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef uint8_t u8;
@@ -77,7 +73,6 @@ static int (*real_getsockopt)(int, int, int, void *, socklen_t *);
 static ssize_t (*real_recvfrom)(int, void *, size_t, int,
                                 struct sockaddr *, socklen_t *);
 
-// --- таблица сокетов ---
 #define NSOCK 16
 struct nsock {
     int used;              // слот занят
@@ -105,7 +100,6 @@ static long now_ms(void) {
     return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-// --- обмен с шиной (одноразовый конструктор) ---
 static long bus_lookup_net(void) {
     int s = real_socket(AF_UNIX, SOCK_SEQPACKET, 0);
     if (s < 0) return -1;
@@ -154,7 +148,6 @@ static long bus_lookup_net(void) {
     return -1;
 }
 
-// --- reader: единственный читатель lane'а ---
 static void *reader(void *arg) {
     (void)arg;
     for (;;) {
@@ -178,11 +171,9 @@ static void *reader(void *arg) {
         pthread_mutex_lock(&tab_m);
         struct nsock *k = 0;
         if (m.msg_id >= NET_OPEN_R && m.msg_id <= NET_CLOSE_R) {
-            // R-ответы ищем по ждущему слоту (OPEN_R приходит ДО used=1)
             for (int i = 0; i < NSOCK; i++)
                 if (S[i].used && S[i].wait_id == (int)m.msg_id) { k = &S[i]; break; }
         } else {
-            // push'и адресуются sid'ом netd, а не слотом таблицы
             for (int i = 0; i < NSOCK; i++)
                 if (S[i].used && S[i].sid == sid) { k = &S[i]; break; }
         }
@@ -206,9 +197,6 @@ static void *reader(void *arg) {
                     k->rxlen += tlen;
                     u64 one = 1;
                     real_write(k->efd, &one, 8);
-                    // M14-fix: читатель мог зайти в cond_wait ДО прихода
-                    // данных (реальная сеть = RTT >> локального) — без
-                    // broadcast он спал бы до EOF
                     pthread_cond_broadcast(&k->c);
                 }
             } else if (m.msg_id == NET_EOF) {
@@ -256,7 +244,6 @@ static void init_once(void) {
             lane >= 0 ? "найден" : "НЕ найден (сеть недоступна)");
 }
 
-// --- запрос-ответ на lane'е ---
 static int net_rpc(u32 op, u32 h0, u32 h1, u32 h2, const void *tail, u32 tlen,
                    struct nsock *k, int to_ms) {
     struct ml_msg m = { ML_PROTO_NET, op, 0, 0, {0} };
@@ -301,7 +288,6 @@ static struct nsock *sock_by_fd(int fd) {
     return 0;
 }
 
-// --- перехваты ---
 int socket(int domain, int type, int protocol) {
     init_once();
     fprintf(stderr, "netsh: socket(%d,%d,%d) lane=%d\n", domain, type, protocol, lane);
@@ -342,8 +328,6 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
             sa ? (int)sa->sa_family : -1, k ? 1 : 0);
     if (!k) return real_connect(fd, sa, salen);
     if (sa->sa_family != AF_INET) { errno = EAFNOSUPPORT; return -1; }
-    // протокол NET_* хранит адреса в host-order (как netclient): у netd
-    // свой wbe32 на проводе, sockaddr же несёт network-order
     u32 ip = ntohl(((struct sockaddr_in *)sa)->sin_addr.s_addr);
     u16 port = ntohs(((struct sockaddr_in *)sa)->sin_port);
     pthread_mutex_lock(&tab_m);
@@ -351,7 +335,6 @@ int connect(int fd, const struct sockaddr *sa, socklen_t salen) {
     if (st == 2) { pthread_mutex_unlock(&tab_m); return 0; }
     k->state = 1;
     pthread_mutex_unlock(&tab_m);
-    // установление синхронно для клиента: NET_CONNECT_R придёт с SYN-ACK'ом
     int rc = net_rpc(NET_CONNECT, k->sid, ip, port, 0, 0, k, 15000);
     fprintf(stderr, "netsh: connect rc=%d\n", rc);
     if (rc != ML_E_OK) {
@@ -411,7 +394,6 @@ ssize_t recv(int fd, void *buf, size_t n, int flags) {
     return sock_read(k, buf, n);
 }
 
-// openssl 3.x может идти через recvmsg/readv — хэндлим честно
 ssize_t recvmsg(int fd, struct msghdr *mh, int flags) {
     init_once();
     struct nsock *k = sock_by_fd(fd);
@@ -448,7 +430,6 @@ ssize_t send(int fd, const void *buf, size_t n, int flags) {
     return write(fd, buf, n);
 }
 
-// libfetch ходит именно через sendto/recvfrom
 ssize_t sendto(int fd, const void *buf, size_t n, int flags,
                const struct sockaddr *sa, socklen_t sl) {
     (void)sa; (void)sl;
@@ -491,7 +472,6 @@ static int poll_wait(struct pollfd *, nfds_t, int);
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     init_once();
-    // есть ли наши сокеты среди дескрипторов?
     int ours = 0;
     for (nfds_t i = 0; i < nfds; i++)
         if (sock_by_fd(fds[i].fd)) ours = 1;
@@ -536,7 +516,6 @@ int fcntl(int fd, int cmd, ...) {
             return real_fcntl(fd, cmd, arg);
         return real_fcntl(fd, cmd, arg);
     }
-    // сетевые fd: флаги храним в ядре eventfd'а, остальное — успех
     if (cmd == F_GETFL) return 0;
     if (cmd == F_SETFL) return 0;
     return 0;
@@ -548,11 +527,7 @@ static int getaddrinfo_m14(const char *host, const char *serv,
 int getaddrinfo(const char *host, const char *serv,
                 const struct addrinfo *hints, struct addrinfo **res) {
     init_once();
-    // glibc-резолвер требует UDP (netd его не умеет) — резолвим сами
-    // по TCP:53 через netd; AF_INET6-запросы честно не поддержаны
     if (hints && hints->ai_family == AF_INET6) return EAI_NONAME;
-    // AI_NUMERICHOST:caller требует только литерал (libfetch так проверяет,
-    // имя ли host — резолвить нельзя, иначе ломается SAN-проверка TLS)
     if (hints && (hints->ai_flags & AI_NUMERICHOST)) {
         struct in_addr lit;
         if (!host || inet_pton(AF_INET, host, &lit) != 1) return EAI_NONAME;
@@ -561,10 +536,6 @@ int getaddrinfo(const char *host, const char *serv,
     return getaddrinfo_m14(host, serv, hints, res);
 }
 
-// --- DNS (M14): /etc/resolv.conf -> TCP:53 через netd. UDP-стека в netd
-// нет, а DNS-over-TCP обязателен для резолверов (RFC 7766): query = 2-байтовая
-// длина + сообщение, ответ так же. A-записи достаточно (двойные запросы
-// A/AAAA libfetch сам переваривает).
 
 static unsigned short dns_port(const char *serv) {
     if (!serv) return 80;
@@ -575,7 +546,6 @@ static unsigned short dns_port(const char *serv) {
     return 80;
 }
 
-// resolv.conf: до 2 nameserver'ов (путь переопределяется для тестов)
 static int dns_nameservers(unsigned int *out, int max) {
     const char *path = getenv("MILIN_RESOLV_CONF");
     if (!path) path = "/etc/resolv.conf";
@@ -603,13 +573,11 @@ static int dns_nameservers(unsigned int *out, int max) {
     return n;
 }
 
-// имена -> QNAME (метки длиной+байты), ответ: пропускаем question
 static int dns_query(unsigned int ns, const char *name,
                      unsigned int *out_a, int max_a) {
     char q[512];
     memset(q, 0, sizeof(q));
     int ql = 0;
-    // header: id, RD, QDCOUNT=1
     q[ql++] = 0x12; q[ql++] = 0x34;
     q[ql++] = 0x01; q[ql++] = 0x00;
     q[ql++] = 0; q[ql++] = 1; q[ql++] = 0; q[ql++] = 0;
@@ -629,7 +597,6 @@ static int dns_query(unsigned int ns, const char *name,
     q[ql++] = 0; q[ql++] = 1;    // QTYPE=A
     q[ql++] = 0; q[ql++] = 1;    // QCLASS=IN
 
-    // TCP: 2-байтовая длина префиксом
     unsigned char pkt[600];
     pkt[0] = (unsigned char)(ql >> 8);
     pkt[1] = (unsigned char)(ql & 0xFF);
@@ -650,7 +617,6 @@ static int dns_query(unsigned int ns, const char *name,
         close(fd);
         return -1;
     }
-    // ответ: 2 байта длины, потом сообщение (может прийти кусками)
     unsigned char hdr[2];
     size_t got = 0;
     while (got < 2) {
@@ -672,7 +638,6 @@ static int dns_query(unsigned int ns, const char *name,
     int qd = (resp[4] << 8) | resp[5];
     int an = (resp[6] << 8) | resp[7];
     if (!an) { free(resp); return -1; }
-    // question-секции: QNAME + 4 байта
     int off = 12;
     for (int i = 0; i < qd; i++) {
         while (off < plen && resp[off]) {
@@ -685,7 +650,6 @@ qdone:
     }
     int found = 0;
     for (int i = 0; i < an && found < max_a; i++) {
-        // name: метки или указатель
         int jump = 0, saved = 0;
         for (;;) {
             if (off >= plen) break;
@@ -721,7 +685,6 @@ int getaddrinfo_m14(const char *host, const char *serv,
     *res = 0;
     if (!host || !*host) return EAI_NONAME;
 
-    // литералы — мимо DNS
     struct in_addr lit;
     if (inet_pton(AF_INET, host, &lit) == 1) {
         struct addrinfo *ai = calloc(1, sizeof(*ai) + sizeof(struct sockaddr_in));

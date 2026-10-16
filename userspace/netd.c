@@ -1,15 +1,4 @@
 // /sbin/netd (M12): userspace-сетевой стек — NIC-драйвер + TCP/IP + сервис.
-//
-// Архитектура микроядра: в ядре нет ни стека, ни драйвера NIC. netd —
-// userspace-сервер: e1000 через UIO (BAR0 в mmap, кольца/буферы в
-// pinned-DMA регионе /dev/mlpinned — NIC обязан работать с физикой),
-// поверх — ARP/IPv4/ICMP/TCP и сервис "net0" (ML_PROTO_NET) на шине:
-// клиенты открывают сокеты, соединяются, шлют данные — всё lane'ами.
-// QEMU: -device e1000,netdev=n0 -netdev user,id=n0 (10.0.2.15 <- slirp).
-// M15: UDP-слой и DHCP-клиент (RFC 2131) — адресация больше не зашита:
-// DISCOVER/OFFER/REQUEST/ACK, аренда с T1-renew, DNS-опция уезжает в
-// /etc/resolv.conf (resolv.conf читают клиенты: netsh/xbps). Нет сервера
-// в сети — fallback на slirp-статику, DHCP продолжает пробовать в фоне.
 
 #include "milin.h"
 #include "ipc.h"
@@ -21,7 +10,6 @@
 #define O_CREAT          0100
 #define O_TRUNC          01000
 
-// --- адресация: DHCP-аренда, до неё 0 (fallback — slirp-статика) ---
 #define ETH_HDR     14
 #define ETH_MTU     1500
 static u32 my_ip, my_mask, my_gw;
@@ -31,7 +19,6 @@ static u8 addr_set;                        // адрес сконфигурир�
 #define NET_MASK    my_mask
 #define NET_GW_IP   my_gw
 
-// --- e1000 MMIO ---
 #define E_CTRL   0x0000
 #define E_RCTL   0x0100
 #define E_TCTL   0x0400
@@ -55,7 +42,6 @@ static u8 addr_set;                        // адрес сконфигурир�
 #define OFF_TXBUF  8192
 #define OFF_RXBUF  (8192 + NDESC * RBUFSZ)
 
-// --- TCP ---
 #define MSS        1460
 #define RBUF_MAX   (32 * 1024)
 #define SNDBUF_MAX (16 * 1024)
@@ -122,7 +108,6 @@ static u8 *tx_frame(void);
 static int nic_tx_commit(u32 len);
 static void nic_poll(void);
 
-// --- NIC-слой (M15): e1000 / e1000e / r8169 за одним интерфеймом ---
 struct nic_ops {
     const char *name;
     u8 * (*txf)(void);
@@ -132,7 +117,6 @@ struct nic_ops {
 };
 static struct nic_ops *nic;
 
-// RFC 1071: бегущая сумма (без финального дополнения)
 static u32 csum_run(const u8 *b, u32 n, u32 sum) {
     for (u32 i = 0; i + 1 < n; i += 2)
         sum += (u32)((b[i] << 8) | b[i + 1]);
@@ -145,18 +129,14 @@ static u16 csum_fin(u32 sum) {
     return (u16)(~sum & 0xFFFF);
 }
 
-// --- e1000 ---
 static u32 er(u32 reg) { return mmio[reg >> 2]; }
 static void ew(u32 reg, u32 v) { mmio[reg >> 2] = v; }
 
-// legacy TX-дескриптор: addr(8,LE) len(2) cso(1) cmd(1) status(1) css(1) special(2)
-// legacy RX-дескриптор: addr(8,LE) len(2,от hw) csum(2) status(1) errors(1) special(2)
 static volatile u8 *txd(int i) { return dma + OFF_TXRING + (u32)i * 16; }
 static volatile u8 *rxd(int i) { return dma + OFF_RXRING + (u32)i * 16; }
 static u32 txbuf(int i) { return OFF_TXBUF + (u32)i * RBUFSZ; }
 static u32 rxbuf(int i) { return OFF_RXBUF + (u32)i * RBUFSZ; }
 
-// буфер кадра текущего TX-дескриптора
 static u8 *e1000_txf(void) { return dma + txbuf((int)tx_cur); }
 
 static int e1000_txc(u32 len) {
@@ -195,7 +175,6 @@ static void e1000_poll(void) {
     }
 }
 
-// --- ARP ---
 static u32 ac_ip; static u8 ac_mac[6]; static u8 ac_ok; static u32 ac_t0;
 
 static int arp_get(u32 ip, u8 *out) {
@@ -224,8 +203,6 @@ static void arp_input(const u8 *p, u32 n) {
     if (n < 28) return;
     u16 oper = rbe16(p + 6);
     u32 spa = rbe32(p + 14);
-    // кэш только при сконфигурированном адресе: до DHCP маска 0, и
-    // первая же ARP-попутка с любым spa попала бы в кэш шлюза
     if (spa && addr_set && (spa & NET_MASK) == (NET_MY_IP & NET_MASK)) {
         ac_ip = spa; m_memcpy(ac_mac, p + 8, 6); ac_ok = 1;
     }
@@ -246,9 +223,6 @@ static void arp_input(const u8 *p, u32 n) {
     }
 }
 
-// next-hop: адрес в своём сабнете — напрямую, иначе через шлюз (M14:
-// без этого HTTPS-репо за пределами 10.0.2.0/24 недостижимы)
-// src отдельным параметром: DHCP до бинда шлёт с 0.0.0.0
 static int ip_tx_from(u32 src, u32 dst, u8 proto, const u8 *payload, u32 plen) {
     u8 macdst[6];
     if (dst == 0xFFFFFFFFu) {
@@ -281,7 +255,6 @@ static int ip_tx(u32 dst, u8 proto, const u8 *payload, u32 plen) {
     return ip_tx_from(NET_MY_IP, dst, proto, payload, plen);
 }
 
-// --- ICMP echo reply ---
 static void icmp_input(const u8 *ip, u32 n) {
     u32 ihl = (u32)(ip[0] & 0x0F) * 4;
     if (n < ihl + 8) return;
@@ -311,13 +284,11 @@ static void icmp_input(const u8 *ip, u32 n) {
     nic_tx_commit((u32)(ETH_HDR + 20 + plen));
 }
 
-// --- UDP + DHCP (M15, RFC 2131) ---
 #define PROT_UDP      17
 #define DHCP_SRV_PORT 67
 #define DHCP_CLI_PORT 68
 #define DHCP_MAGIC    0x63825363u
 
-// UDP-датаграмма: заголовок + payload, csum с pseudo-header (RFC 768)
 static int udp_tx(u32 src, u32 dst, u16 sport, u16 dport,
                   const u8 *pl, u32 n) {
     u8 pkt[8 + 320];
@@ -369,7 +340,6 @@ static u32 t1_at, exp_at;                    // тики: 1 тик = 50мс
 static u8 first_bind;
 static u8 fallback_set;
 
-// DHCP-кадр: 236 байт фикс + magic + опции
 static void dhcp_send(u8 type, u32 req_ip, u32 srv_id, u32 dst_ip, int bcast) {
     u8 pkt[300];
     m_memset(pkt, 0, 240);
@@ -407,8 +377,6 @@ static int ip2str(u32 ip, char *out) {
     return n;
 }
 
-// DNS-опция 6 -> /etc/resolv.conf (его читают netsh/xbps; resolv.conf
-// из mkinitramfs — только первый загрузочный мир, DHCP его перекрывает)
 static void resolv_conf_write(void) {
     if (!dns1) return;
     long fd = sys3(SYS_open, (long)"/etc/resolv.conf",
@@ -518,8 +486,6 @@ static void dhcp_input(const u8 *p, u32 n) {
 }
 
 static void dhcp_fallback(void) {
-    // slirp-статика: живёт на ISO-бутах/машинах без DHCP-сервера,
-    // DHCP продолжает пробовать в фоне
     fallback_set = 1;
     my_ip = 0x0A00020Fu; my_mask = 0xFFFFFF00u; my_gw = 0x0A000202u;
     addr_set = 1;
@@ -588,7 +554,6 @@ static void dhcp_tick(void) {
     }
 }
 
-// --- TCP ---
 static struct sock *sk_by_sid(u32 sid) {
     if (sid >= NSOCK) return 0;
     return S[sid].state == SS_FREE ? 0 : &S[sid];
@@ -613,8 +578,6 @@ static void sk_free(struct sock *s) {
     S[sid].state = SS_FREE;
 }
 
-// сброс с уведомлением владельца: SYN-этап — CONNECT_R с ошибкой,
-// живое соединение — EOF
 static void sk_fail(struct sock *s, u32 err) {
     u32 sid = (u32)(s - S);
     u8 was_syn = (s->state == SS_SYN);
@@ -625,7 +588,6 @@ static void sk_fail(struct sock *s, u32 err) {
     else push_msg(sid, NET_EOF, err, 0, 0);
 }
 
-// сегмент в очередь передачи; snd_nxt уходит вперёд на len (+1 SYN/FIN)
 static void seg_queue(struct sock *s, u32 off, u32 len, u32 flags) {
     if (s->qn >= TSEG_MAX) return;
     struct tseg *t = &s->q[s->qn++];
@@ -670,7 +632,6 @@ static int syn_tx(struct sock *s) {
     return ip_tx(s->rip, 6, pkt, 24);
 }
 
-// данные идут по порядку: seg_queue нумерует их от snd_nxt
 static void try_tx(struct sock *s) {
     if (s->state != SS_EST && s->state != SS_FINW) return;
     u32 nxt = s->snd_nxt - s->iss - 1;                 // data offset след. байта
@@ -679,7 +640,6 @@ static void try_tx(struct sock *s) {
         u32 len = s->snd_len - nxt;
         if (len > MSS) len = MSS;
         seg_queue(s, nxt, len, F_ACK);
-        // сразу в провод: очередь — для ретрансмиссии, а не для ожидания
         tcp_seg_tx(s, s->snd_nxt - len, nxt, len, F_ACK);
         s->q[s->qn - 1].sent = 1;
         nxt += len;
@@ -756,7 +716,6 @@ static void tcp_input(const u8 *ip, const u8 *t, u32 plen) {
             s->rx_len += dlen;
             s->rcv_nxt += dlen;
             tcp_seg_tx(s, s->snd_nxt, 0, 0, F_ACK);
-            // данные клиенту сразу: EOF может прийти в том же батче
             while (s->rx_len) {
                 u32 n = s->rx_len > 256 ? 256 : s->rx_len;
                 push_msg((u32)(s - S), NET_DATA, 0, s->rxb, n);
@@ -781,12 +740,8 @@ static void ip_input(const u8 *f, u32 n) {
     if (n < 20) return;
     const u8 *ip = f + ETH_HDR;
     u32 dst = rbe32(ip + 16);
-    // DHCP-транзакция: ACK может прийти unicast'ом на предложенный адрес,
-    // которого у нас ещё нет
     u32 yi = (dhcp_st == DS_REQ) ? dhcp_yi : 0;
     if (dst != NET_MY_IP && dst != 0xFFFFFFFFu && dst != yi) return;
-    // длина — из IP total length: slirp добивает короткие кадры нулями
-    // до 60 байт (Ethernet минимум), нули не должны попадать в поток
     u32 plen = (u32)((ip[2] << 8) | ip[3]);
     u32 ihl = (u32)(ip[0] & 0x0F) * 4;
     if (plen < ihl || plen > n - ETH_HDR) plen = n - ETH_HDR;
@@ -799,13 +754,11 @@ static int e1000_init(long uiofd) {
     mmio = (volatile u32 *)sys6(SYS_mmap, 0, 0x20000, 1 | 2, 1, uiofd, 0);
     if ((long)mmio < 0) { P("netd: mmap BAR0 FAIL\n"); return -1; }
 
-    // pinned-DMA: кольца и буферы должны быть видны NIC по физике
     long pd = sys3(SYS_open, (long)"/dev/mlpinned", O_RDWR, 0);
     if (pd < 0) { P("netd: /dev/mlpinned FAIL\n"); return -1; }
     dma = (u8 *)sys6(SYS_mmap, 0, 4u << 20, 1 | 2, 1, pd, 0);
     if ((long)dma < 0) { P("netd: mmap pinned FAIL\n"); return -1; }
     u64 phys = 0;
-    // MLPIO_GETPHYS = _IOR('m', 1, u64) = 0x80086D01
     if (sys3(SYS_ioctl, pd, 0x80086D01, (long)&phys) < 0) {
         P("netd: ioctl GETPHYS FAIL\n");
         return -1;
@@ -854,19 +807,12 @@ static int e1000_init(long uiofd) {
     return 0;
 }
 
-// e1000e (82574): карта регистров совместима с e1000, дескрипторы — те же
-// legacy (DTYP=0 в RCTL; расширенные включаются только packet-split'ом).
-// Отличия: PCIe, ASPM-эррата — гасится в probe'е через config space.
 static int e1000e_init(long uiofd) {
     if (e1000_init(uiofd) < 0) return -1;
     P("netd: e1000e — legacy-дескрипторы, интрофф (polling)\n");
     return 0;
 }
 
-// --- r8169 (RTL8168/8111, M15): C+ дескрипторы, polling ---
-// Регистры/биты — из ванильного r8169_main.c (7.2.9): опции в DW0/DW1,
-// адрес в DW2/DW3, Own=1 — владение NIC. QEMU rtl8169 не моделирует —
-// валидация только на реальном железе (BOOTS-гейт «r8169»).
 #define R_MAC0      0x0000
 #define R_MAC4      0x0004
 #define R_TXDLOW    0x0020
@@ -1007,7 +953,6 @@ static int r8169_init(long uiofd) {
     return 0;
 }
 
-// --- таблица NIC + диспетчеризация ---
 static struct nic_ops e1000_ops = {
     "e1000", e1000_txf, e1000_txc, e1000_poll, e1000_init
 };
@@ -1022,7 +967,6 @@ static u8 *tx_frame(void) { return nic->txf(); }
 static int nic_tx_commit(u32 len) { return nic->txc(len); }
 static void nic_poll(void) { nic->poll(); }
 
-// "0x100e\n" -> 0x100e
 static int parse_hex16(const char *buf, long n) {
     long v = 0;
     int started = 0;
@@ -1037,7 +981,6 @@ static int parse_hex16(const char *buf, long n) {
     return started ? (int)v : -1;
 }
 
-// ASPM-эррата e1000e/r8169: LNKCTL (cap id 0x10) — очистить L0s/L1
 static void pcie_aspm_off(int idx) {
     char path[48];
     const char *cfg = "/sys/class/uio/uio /device/config";
@@ -1119,7 +1062,6 @@ static int nic_probe(void) {
         P("netd: /dev/uioN не найден (e1000/e1000e/r8169)\n");
         return -1;
     }
-    // BUS MASTER: uio_pci_generic не ставит бит сам — без него DMA мимо
     const char *cfg = "/sys/class/uio/uio /device/config";
     m_memcpy(path, cfg, 34);
     path[18] = (char)('0' + idx);
@@ -1141,7 +1083,6 @@ static int nic_probe(void) {
     return nic->init(uiofd);
 }
 
-// --- сервис ---
 static void sk_open(u32 type, struct lane *ln) {
     struct ml_msg r = { ML_PROTO_NET, NET_OPEN_R, ML_E_OK, 0, {0} };
     if (type != 1) { r.err = ML_E_NO_SUCH_ENTITY; }
@@ -1165,9 +1106,6 @@ static void sk_connect(struct lane *ln, u32 sid, u32 rip, u16 rport) {
     struct ml_msg r = { ML_PROTO_NET, NET_CONNECT_R, ML_E_OK, 0, {0} };
     *ml_h(&r, 0) = sid;
     struct sock *s = sk_by_sid(sid);
-    // libfetch дергает connect() повторно (happy-eyeballs ретраи):
-    // ALLOC — стартуем; SYN — уже устанавливается (ответ придёт async);
-    // EST — уже установлено, подтверждаем сразу
     if (!s) { r.err = ML_E_NO_SUCH_ENTITY; goto out; }
     if (s->state == SS_SYN) return;
     if (s->state == SS_EST) goto out;
@@ -1221,8 +1159,6 @@ out:
 }
 
 static void lane_input(struct lane *ln) {
-    // ОДНО сообщение за итерацию: длинное блокирующее чтение внутри
-    // event-loop'а остановило бы nic_poll/timers — ретрансмиссии бы умерли
     struct ml_msg m;
     char tail[ML_MAXTAIL];
     struct ml_aux aux;
@@ -1293,8 +1229,6 @@ void milin_main(void) {
     for (int i = 0; i < NLANE; i++) L[i].fd = -1;
 
     if (nic_probe() < 0) {
-        // без NIC (ISO-бут, реальная машина без e1000-класса) — не умирать:
-        // рестарт-петля супервизора роняет бут; паркуемся, сеть просто нет
         P("netd: NIC не найден — паркуюсь\n");
         for (;;) sleep_ms(1000);
     }

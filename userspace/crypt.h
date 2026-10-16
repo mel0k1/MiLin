@@ -1,5 +1,4 @@
 // sha512-crypt: проверка паролей /etc/shadow без libc.
-// самодостаточный заголовок: только свои типы, пригоден и для хост-теста.
 #ifndef MILIN_CRYPT_H
 #define MILIN_CRYPT_H
 
@@ -118,7 +117,6 @@ static void sha512_finish(struct sha512_ctx *c, cb8 *out) {
             out[i * 8 + j] = (cb8)(c->h[i] >> (56 - j * 8));
 }
 
-// порядок байт digest при base64-кодировке задаёт transpose-таблица
 static const int sha512_tmap[64] = {
     42, 21,  0,  1, 43, 22, 23,  2, 44, 45, 24,  3,  4, 46, 25, 26,
      5, 47, 48, 27,  6,  7, 49, 28, 29,  8, 50, 51, 30,  9, 10, 52,
@@ -151,7 +149,6 @@ static unsigned c_uclen(const char *s) {
     return n;
 }
 
-// rounds фиксированы: 5000 (дефолт /etc/shadow без rounds=)
 static void sha512_crypt(const char *pw, unsigned pw_len,
                          const char *salt, unsigned salt_len, char *out86) {
     struct sha512_ctx c;
@@ -204,7 +201,6 @@ static void sha512_crypt(const char *pw, unsigned pw_len,
     sha512_b64(cur, out86);
 }
 
-// enc: 86 символов после "$6$salt$"
 static int sha512_verify(const char *pw, const char *salt, const char *enc) {
     char out[88];
     sha512_crypt(pw, c_uclen(pw), salt, c_uclen(salt), out);

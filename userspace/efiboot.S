@@ -1,9 +1,4 @@
-# MiLin efiboot (M22): SysV -> Win64 мост EFI-вызовов.
-# Прошивка зовёт _start в Win64 (RCX=ImageHandle, RDX=SystemTable, shadow 32),
-# gcc же компилирует SysV (RDI,RSI,...): _start перекладывает аргументы,
-# efi_callN пересобирает SysV-вызов C-кода в Win64-вызов boot services.
-# Стек: Win64 требует выравнивание 16 перед call и 32 байта shadow space;
-# 5-й и 6-й аргументы уезжают на стек поверх shadow.
+# SysV -> Win64 мост EFI-вызовов: перекладка аргументов, shadow space.
         .text
 
         .section .text.start,"ax"

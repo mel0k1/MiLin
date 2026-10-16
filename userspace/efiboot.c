@@ -1,26 +1,4 @@
-// MiLin efiboot (M22): EFI boot manager на ESP — BOOTX64.EFI это не ядро,
-// а наш лоадер. Прошивка грузит его по fallback-имени, лоадер читает с ESP
-// \EFI\BOOT\CMDLINE (ascii, пишет minstall при установке) и стартует
-// \EFI\BOOT\VMLINUZ.EFI с LoadOptions — per-install root=PARTUUID без
-// перекомпиляции ядра (у EFI stub LoadOptions перекрывают CONFIG_CMDLINE).
-//
-// PE32+ без .reloc: образ линкуется на фиксированный ImageBase 0x100000,
-// геометрия зашита в efiboot.ld (заголовки 512 + тело 0xFE00 = 64К).
-// Две секции: .flat (код) и .sbat (SBAT-метаданные для revocation —
-// shim/revocation-инфраструктура читает её по таблице секций); таблица
-// data directories на месте (Certificate Table заполнит sbsign) — образ
-// подписывается sbsign'ом без правки геометрии. Подпись — tools/sb-keys.sh
-// (тестовые PK/KEK/db), гейт SecureBoot — бут D в tools/test-install.sh.
-// CMDLINE/VMLINUZ.EFI читаются через SimpleFileSystem, ядро грузится
-// LoadImage по device path (DeviceHandle ESP + FILE_PATH-нода) — у ядра
-// будет честный DeviceHandle, как при загрузке boot-менеджером прошивки.
-//
-// NVRAM (M22): через Runtime Services лоадер сам ведёт boot-entry
-// Boot####/BootOrder в efibootmgr-совместимом формате — имя "MiLin",
-// target \EFI\MILIN\BOOTX64.EFI (второй экземпляр лоадера, minstall
-// пишет его же цепочкой кластеров). Первый бут — fallback, лоадер создаёт
-// запись и проверяет её чтением назад; следующие буты прошивка делает
-// через BootOrder — лоадер узнаёт это по собственному device path.
+// MiLin efiboot (M22): EFI boot manager на ESP — прошивка грузит наш лоадер по fallback-имени.
 
 typedef unsigned long u64;
 typedef unsigned int u32;
@@ -35,9 +13,6 @@ typedef u64 efi_status;
 
 #define FILE_MODE_READ 1
 
-// --- PE32+ заголовок, секция .pe (ld ставит её в LMA 0) ---
-// фиксированная геометрия: entry 0x200, ImageBase 0x100000, .flat VA 0x200
-// size 0xFE00 + .sbat VA 0x10000 (см. efiboot.ld), 5 data directories.
 struct pe_sec {
     u8  sname[8];
     u32 vsize, vaddr, rawsize, rawptr;
@@ -46,7 +21,6 @@ struct pe_sec {
     u32 sec_char;
 } __attribute__((packed));
 
-// секция .sbat: revocation-база shim-инфраструктуры (CSV, версия 1)
 #define SBAT_CSV \
     "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\n" \
     "milin-loader,1,MiLin,milin-loader,1,https://github.com/mel0k1/MiLin\n"
@@ -112,7 +86,6 @@ static const struct pe_image PE = {
     },
 };
 
-// --- EFI: минимум структур, вызовы только через туннели efiboot.S ---
 struct efi_tbl_hdr {
     u64 signature;
     u32 revision;
@@ -158,7 +131,6 @@ struct efi_st {
     u64 ntables, config;
 };
 
-// --- Runtime Services: NVRAM-переменные (M22) ---
 struct efi_rt {
     struct efi_tbl_hdr hdr;
     u64 get_time, set_time, get_wakeup, set_wakeup;
@@ -229,7 +201,6 @@ extern u64 efi_call5(u64 fn, u64 a, u64 b, u64 c, u64 d, u64 e);
 extern u64 efi_call6(u64 fn, u64 a, u64 b, u64 c, u64 d, u64 e, u64 f);
 u64 efi_main(u64 image_handle, u64 stp);
 
-// ascii -> CHAR16 + вывод на ConOut (серийная консоль прошивки)
 static void con_out(struct efi_st *st, const char *s) {
     u16 b[64];
     u32 i = 0;
@@ -258,7 +229,6 @@ static void con_hex(struct efi_st *st, const char *who, efi_status s) {
     con_out(st, b);
 }
 
-// длина device path до END (включая END-ноду)
 static u64 dp_len(const struct efi_dp_node *dp) {
     u64 off = 0;
     for (;;) {
@@ -271,9 +241,7 @@ static u64 dp_len(const struct efi_dp_node *dp) {
     return off;
 }
 
-// --- M22: boot-entry в NVRAM ---
 
-// сравнение CHAR16-строк
 static int eq16(const u16 *a, const u16 *b) {
     for (;;) {
         if (*a != *b) return 0;
@@ -283,7 +251,6 @@ static int eq16(const u16 *a, const u16 *b) {
     }
 }
 
-// Boot0000..BootFFFF: имя переменной в буфере
 static void boot_var_name(u16 *b, u32 n) {
     static const u16 hex[] = { '0','1','2','3','4','5','6','7',
                                '8','9','A','B','C','D','E','F' };
@@ -295,7 +262,6 @@ static void boot_var_name(u16 *b, u32 n) {
     b[8] = 0;
 }
 
-// GetVariable: 1 = есть (данные в buf, длина в *len), 0 = нет/ошибка
 static int get_var(struct efi_rt *rt, const u16 *name, void *buf, u64 *len) {
     u32 attr = 0;
     efi_status s = efi_call5(rt->get_variable, (u64)name, (u64)g_gv,
@@ -303,7 +269,6 @@ static int get_var(struct efi_rt *rt, const u16 *name, void *buf, u64 *len) {
     return s == EFI_SUCCESS;
 }
 
-// последний FILE_PATH-нода device path — имя, которым нас загрузили
 static const u16 *self_name(const struct efi_dp_node *dp) {
     const u16 *name = 0;
     u64 off = 0;
@@ -319,7 +284,6 @@ static const u16 *self_name(const struct efi_dp_node *dp) {
     return name;
 }
 
-// SecureBoot-переменная: 1 = прошивка проверяет подписи (PK записан)
 static void sb_check(struct efi_st *st) {
     struct efi_rt *rt = st->runtime;
     static const u16 p_sb[] = { 'S','e','c','u','r','e','B','o','o','t', 0 };
@@ -332,10 +296,6 @@ static void sb_check(struct efi_st *st) {
     }
 }
 
-// Boot####: [ u32 attr ][ u16 FilePathListLength ][ CHAR16 desc ][ dp ][ opt ]
-// ищем запись "MiLin"; нет — создаём на первом свободном номере (target
-// \EFI\MILIN\BOOTX64.EFI на ESP загрузки) и ставим первым в BootOrder;
-// запись проверяем чтением назад (M22 NVRAM ENTRY OK)
 static void nvram_entry(struct efi_st *st, struct efi_li *li) {
     struct efi_rt *rt = st->runtime;
     static u8 ent[1024], rb[1024], ord[256], nord[256];
@@ -354,7 +314,6 @@ static void nvram_entry(struct efi_st *st, struct efi_li *li) {
     u64 eplen = esplen + fplen; // esp без END + FILE-нода + END
     if (eplen > sizeof(ent) - 32) return;
 
-    // свой номер: свободный или уже с описанием "MiLin"
     u32 n, have = 0xFFFFFFFF;
     for (n = 0; n < 256; n++) {
         boot_var_name(nm, n);
@@ -398,7 +357,6 @@ static void nvram_entry(struct efi_st *st, struct efi_li *li) {
             con_hex(st, "MILEFI: SetVariable", s);
             return;
         }
-        // чтение назад — байт в байт
         u64 rlen = sizeof(rb);
         int same = get_var(rt, nm, rb, &rlen) && rlen == o;
         for (u32 i = 0; same && i < o; i++)
@@ -408,7 +366,6 @@ static void nvram_entry(struct efi_st *st, struct efi_li *li) {
         boot_var_name(nm, have);
     }
 
-    // BootOrder: наш номер первым (если шина ещё не ведёт его)
     u64 olen = sizeof(ord);
     int have_order = get_var(rt, p_order, ord, &olen);
     int present = 0;
@@ -427,8 +384,6 @@ static void nvram_entry(struct efi_st *st, struct efi_li *li) {
     con_out(st, "MILEFI: boot entry in BootOrder");
 }
 
-// файл целиком в buf; size: до вызова — ёмкость, после — фактическая длина
-// (не нужен: ядро грузится LoadImage по device path, firmware читает сама)
 
 u64 efi_main(u64 image_handle, u64 stp) {
     struct efi_st *st = (struct efi_st *)stp;
@@ -444,7 +399,6 @@ u64 efi_main(u64 image_handle, u64 stp) {
         return EFI_LOAD_ERROR;
     }
 
-    // M22: кем загружены — NVRAM-entry (\EFI\MILIN\...) или fallback
     if (li->file_path) {
         const u16 *self = self_name((const struct efi_dp_node *)li->file_path);
         if (self && eq16(self, p_milin))
@@ -468,7 +422,6 @@ u64 efi_main(u64 image_handle, u64 stp) {
         return EFI_LOAD_ERROR;
     }
 
-    // CMDLINE: ascii на ESP -> pool (UTF-16 под LoadOptions)
     u64 cf = 0;
     s = efi_call5(((struct efi_file *)root)->open, root, (u64)&cf,
                   (u64)p_cmdline, FILE_MODE_READ, 0);
@@ -511,11 +464,6 @@ u64 efi_main(u64 image_handle, u64 stp) {
     for (u64 i = 0; i < clen; i++)
         opts[i] = (u16)ascii[i];
 
-    // ядро читаем сами (firmware LoadImage по device path на этом образе
-    // виснет) и грузим SourceBuffer'ом: DevicePath=NULL, прошивка делает
-    // внутренний memory-device path. initrd= в cmdline нет — DeviceHandle
-    // у child будет пустой, EFI-stub это переживает (efi_load_initrd
-    // возвращает SUCCESS при отсутствии initrd-источников)
     u64 kf = 0;
     s = efi_call5(((struct efi_file *)root)->open, root, (u64)&kf,
                   (u64)p_kernel, FILE_MODE_READ, 0);
@@ -547,7 +495,6 @@ u64 efi_main(u64 image_handle, u64 stp) {
         return EFI_LOAD_ERROR;
     }
 
-    // LoadImage + LoadOptions + StartImage — как boot-менеджер прошивки
     u64 child = 0;
     s = efi_call6(bs->load_image, 0, image_handle, 0, kbuf, ksz, (u64)&child);
     if (s != EFI_SUCCESS || !child) {

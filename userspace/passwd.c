@@ -1,7 +1,4 @@
-// /sbin/passwd (M20): смена пароля в /etc/shadow (sha512-crypt). root меняет
-// любой аккаунт без текущего пароля; остальные — свой, подтверждая текущий.
-// соль — 16 символов из /dev/urandom; запись атомарная: shadow.tmp ->
-// fsync -> fchmod 0600 -> rename. бинарь setuid root.
+// passwd (M20): смена пароля в /etc/shadow (sha512-crypt); root — без текущего пароля.
 
 #include "milin.h"
 #include "crypt.h"
@@ -34,7 +31,6 @@ static int read_line(char *buf, int max) {
     return n;
 }
 
-// подсказка + чтение с выключенным эхом, эхо восстанавливается всегда
 static int ask(char *buf, int max) {
     u64 tio[8];
     m_memset(tio, 0, sizeof(tio));
@@ -85,7 +81,6 @@ static void scopy(char *dst, const char *src, int max) {
     dst[i] = 0;
 }
 
-// поиск в /etc/passwd: по имени (name != 0) либо по uid, имя -> out
 static int lookup_user(const char *name, long uid, char *out, int omax) {
     static char buf[4096];
     long fd = sys3(SYS_open, (long)"/etc/passwd", O_RDONLY, 0);
@@ -121,7 +116,6 @@ static int lookup_user(const char *name, long uid, char *out, int omax) {
     return 0;
 }
 
-// salt/enc из "$6$salt$hash86" строки юзера в /etc/shadow
 static int find_shadow(const char *user, char *salt, int smax, char *enc, int emax) {
     static char buf[4096];
     long fd = sys3(SYS_open, (long)"/etc/shadow", O_RDONLY, 0);
@@ -168,8 +162,6 @@ static long wr_all(long fd, const char *p, long n) {
     return 0;
 }
 
-// замена hash-поля юзера, остальные строки байт в байт; откат через unlink
-// при любом сбое — shadow либо старый, либо полный новый
 static int rewrite_shadow(const char *user, const char *field) {
     static char buf[8192];
     long fd = sys3(SYS_open, (long)"/etc/shadow", O_RDONLY, 0);

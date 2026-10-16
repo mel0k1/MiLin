@@ -1,16 +1,12 @@
-// MiLin wire protocol: формат сообщений и opcodes, общий для nostdlib
-// и glibc-сборок. Инклюдер обязан предоставить typedef u32/u64.
+// wire-формат сообщений шины: head+tail; инклюдер обязан дать typedef u32/u64.
+
 #ifndef MILIN_MLPROTO_H
 #define MILIN_MLPROTO_H
 
-// --- формат сообщения (bragi-стиль) ---
-// один пакет = одно сообщение: [ struct ml_msg ][ tail: tail_len байт ]
-// head — inline-поля фиксированного размера (как head(128) в bragi).
 #define ML_HEAD 24
 #define ML_MAXTAIL 256
 #define ML_MAXHOOKS 4
 
-// имена сущностей: head-слоты 0-1 (16 байт), транспорт — слот 2
 #define ML_MAXNAME 16
 
 struct ml_msg {
@@ -21,29 +17,24 @@ struct ml_msg {
     char head[ML_HEAD];
 };
 
-// inline-поля head как u64-слоты (bragi хранит скаляры в head)
 static inline u64 *ml_h(struct ml_msg *m, int i) { return (u64 *)(m->head + i * 8); }
 
-// коды ошибок — как enum Error в mbus.bragi
 #define ML_E_OK              0
 #define ML_E_NO_SUCH_ENTITY  1
 #define ML_E_PERM            2  // отказ по capability-политике (M7)
 #define ML_E_BUSY            3  // имя уже занято (M8)
 #define ML_E_IO              4  // транспорт не создался (M8)
 
-// имя обязано быть NUL-terminated в пределах слотов 0-1
 static inline int ml_name_ok(const char *s) {
     for (int i = 0; i < ML_MAXNAME; i++) if (!s[i]) return 1;
     return 0;
 }
 
-// --- M7: capability-модель на lane'ах ---
 #define ML_CAP_WRITE  (1u << 0)  // LOG_WRITE / LOG_WRITEQ
 #define ML_CAP_STATS  (1u << 1)  // LOG_STATS
 #define ML_CAP_CLOSE  (1u << 2)  // LOG_CLOSE (закрытие helq-сессии)
 #define ML_CAP_ADMIN  (1u << 3)  // LOG_RESET (админ-операция)
 
-// --- протокол реестра (ML_PROTO_BUS, идея mbus) ---
 #define ML_PROTO_BUS 1
 #define BUS_REGISTER   1
 #define BUS_REGISTER_R 2
@@ -54,7 +45,6 @@ static inline int ml_name_ok(const char *s) {
 #define BUS_WHEREIS_R  7
 #define BUS_REVOKE     8
 
-// --- протокол log-сервера (ML_PROTO_LOG) ---
 #define ML_PROTO_LOG 2
 #define LOG_WRITE    1
 #define LOG_WRITE_R  2
@@ -65,28 +55,12 @@ static inline int ml_name_ok(const char *s) {
 #define LOG_WRITEQ   7
 #define LOG_RESET    8
 #define LOG_RESET_R  9
-// M22: bulk-WRITE — данные в арене слотов lane'а (userspace/bulk.h),
-// head-слоты: h[0] = номер слота, h[1] = длина payload; ответ —
-// LOG_WRITE_R с h[0] = stored_len (слот возвращает сервер до ack)
 #define LOG_WRITEB   10
 
-// --- протокол GPU-фасада (ML_PROTO_GPU, M11) ---
-// tail запроса: [ op mlgpu ][ payload ]; ответ: payload или err.
-// placement=kernel — обслуживает kthread домена (/dev/amdgpu),
-// placement=user — демон gpud через lane "gpu.amdgpu".
 #define ML_PROTO_GPU 3
 #define GPU_REQ      1
 #define GPU_REQ_R    2
 
-// --- протокол сети (ML_PROTO_NET, M12) ---
-// сокет-плоскость userspace-стека: netd (e1000 поверх UIO + TCP/IP).
-// Запросы клиента приходят lane'ом, ответы — R-сообщения, данные
-// сервера — push'и (DATA/EOF) владельцу сокета.
-//   NET_OPEN    h[0]=type (1=TCP)          -> NET_OPEN_R    h[0]=sid
-//   NET_CONNECT h[0]=sid h[1]=ip h[2]=port -> NET_CONNECT_R h[0]=sid err
-//   NET_SEND    h[0]=sid tail=байты        -> NET_SEND_R
-//   NET_CLOSE   h[0]=sid                   -> NET_CLOSE_R
-//   NET_DATA / NET_EOF — push: h[0]=sid, tail=байты
 #define ML_PROTO_NET 4
 #define NET_OPEN      1
 #define NET_OPEN_R    2
@@ -100,7 +74,6 @@ static inline int ml_name_ok(const char *s) {
 #define NET_EOF       10
 #define NET_CAP_OPEN (1u << 0)
 
-// --- транспорт lane'а: head[2] в LookupRequest ---
 #define ML_TR_SEQPACKET 0    // AF_UNIX SOCK_SEQPACKET (M5)
 #define ML_TR_HELQ      1    // асинхронные очереди в разделяемой памяти (M5.1)
 #define ML_TR_BULK      2    // seqpacket-lane + арена bulk-слотов (M22)

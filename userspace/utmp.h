@@ -1,7 +1,4 @@
-// utmp/wtmp (M21): формат записи — glibc struct utmp x86_64 (384 байта,
-// compat32: ut_session/ut_tv 32-битные). login пишет USER_PROCESS, getty
-// после смерти сессии — DEAD_PROCESS. /var/run/utmp — слотовая база (запись
-// той же линии заменяется на месте), /var/log/wtmp — только аппенд.
+// utmp/wtmp (M21): glibc-совместимый struct utmp x86_64 (384 байта).
 
 #ifndef MILIN_UTMP_H
 #define MILIN_UTMP_H
@@ -40,8 +37,6 @@ static int utmp_line_eq(const char *a, const char *b) {
     return 1;
 }
 
-// utmp — слот по линии: USER занимает свободный/свой слот, DEAD гасит свой;
-// файл не растёт — новых слотов не больше 16
 static void utmp_slot(const char *path, struct utmp_rec *r) {
     static char buf[16 * 384];
     long fd = sys3(SYS_open, (long)path, O_RDWR, 0);
@@ -66,7 +61,6 @@ static void utmp_slot(const char *path, struct utmp_rec *r) {
     sys3(SYS_close, fd, 0, 0);
 }
 
-// wtmp — история: каждая запись аппендится
 static void utmp_append(const char *path, struct utmp_rec *r) {
     long fd = sys3(SYS_open, (long)path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
@@ -75,7 +69,6 @@ static void utmp_append(const char *path, struct utmp_rec *r) {
     sys3(SYS_close, fd, 0, 0);
 }
 
-// USER_PROCESS: user = имя; DEAD_PROCESS: user = ""
 static void utmp_write(short type, int pid, const char *line, const char *user) {
     struct timeval_k tv;
     if (sys3(SYS_gettimeofday, (long)&tv, 0, 0) != 0) {

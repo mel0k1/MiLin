@@ -1,5 +1,4 @@
 // MiLin userspace shim: raw syscalls, no libc.
-// общий каркас всех binaries: супервизор и серверы.
 #ifndef MILIN_H
 #define MILIN_H
 
@@ -42,7 +41,6 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
     return r;
 }
 
-// --- номера системных вызовов x86_64 ---
 #define SYS_read      0
 #define SYS_write     1
 #define SYS_open      2
@@ -97,8 +95,6 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define MNT_DETACH 2
 #define SEEK_SET   0
 
-// getdents64: struct linux_dirent64 живёт не в uapi, но ABI стабилен;
-// имена в буфере уже NUL-terminированы ядром
 struct ldirent64 {
     u64 d_ino;
     i64 d_off;
@@ -107,12 +103,10 @@ struct ldirent64 {
     char d_name[];
 };
 
-// gettimeofday/gettimespec-стиль: long-поля, усечение до 32-бит — в utmp.h
 struct timeval_k {
     long sec, usec;
 };
 
-// --- мини-строки/память: builtins при переменной длине зовут libc ---
 static void *m_memcpy(void *d, const void *s, unsigned n) {
     unsigned char *dd = d; const unsigned char *ss = s;
     while (n--) *dd++ = *ss++;
@@ -133,7 +127,6 @@ static int m_strncmp(const char *a, const char *b, unsigned n) {
     return n ? (u8)*a - (u8)*b : 0;
 }
 
-// --- печать ---
 #define P(s) sys3(SYS_write, 1, (long)(s), sizeof(s) - 1)
 
 static void print_str(const char *s) {
@@ -157,7 +150,6 @@ static void print_dec(long v) {
     sys3(SYS_write, 1, (long)"\n", 1);
 }
 
-// плоский hex (без 0x и перевода строки): маски прав в лог-строках
 static void print_hex_flat(u32 v) {
     char buf[8];
     for (int i = 7; i >= 0; i--) {
@@ -195,10 +187,6 @@ static void sleep_ms(long ms) {
     sys3(SYS_nanosleep, (long)&t, 0, 0);
 }
 
-// Точка входа: ядро передаёт управление с rsp, выровненным на 16, и БЕЗ
-// return address, а ABI gcc ожидает rsp%16==8 (адрес возврата в стеке).
-// Без этого trampлина любая movaps в теле ловит general protection fault.
-// argc/argv снимаются со стека ДО выравнивания (M19: login читает argv[1]).
 void milin_main(void) __attribute__((noreturn));
 static int milin_argc __attribute__((used));
 static char **milin_argv __attribute__((used));

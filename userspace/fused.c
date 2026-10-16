@@ -1,17 +1,7 @@
 // /sbin/fused (M4): файловая система в userspace через FUSE.
-// Ядро оставляет себе только ВФС и transport (/dev/fuse); семантика
-// файловой системы — целиком здесь: FUSE_INIT, LOOKUP, GETATTR, ACCESS.
-// M9.1: OPEN/READ — файл не только виден (stat), но и читается:
-// /mnt/README отдаёт содержимое непривилегированному клиенту.
-// M5.2: WRITE/READ на /mnt/note.txt (DIRECT_IO, мимо page cache),
-// OPENDIR/READDIR — каталог перечисляется getdents64'ом. Права решает
-// сервер: default_permissions выключен, README на запись не открывается.
-//
-// ABI сверен с include/uapi/linux/fuse.h v7.2 (FUSE_KERNEL 7.45).
 
 #include "milin.h"
 
-// --- fuse ABI ---
 #define FUSE_LOOKUP  1
 #define FUSE_GETATTR 3
 #define FUSE_OPEN    14
@@ -179,12 +169,10 @@ void milin_main(void) {
 
     sys3(SYS_mkdir, (long)"/mnt", 0755, 0);
 
-    // fd сервера передаётся ядру опцией mount
     char opts[64];
     char *p = opts;
     const char *pre = "fd=";
     for (int i = 0; pre[i]; i++) *p++ = pre[i];
-    // fd обычно 3, но не полагаемся: печатаем реальный номер
     long n = fd;
     char tmp[12];
     int ti = 0;
@@ -203,7 +191,6 @@ void milin_main(void) {
     for (;;) {
         long rd = sys3(SYS_read, fd, (long)req_buf, sizeof(req_buf));
         if (rd <= 0) {
-            // umount от супервизора -> EOF: штатное завершение сервера
             P("fused: соединение закрыто, выхожу\n");
             sys3(SYS_exit, 0, 0, 0);
         }
@@ -223,7 +210,6 @@ void milin_main(void) {
             break;
         }
         case FUSE_LOOKUP: {
-            // имя после in-header
             int idx = lookup_idx(name);
             if (idx < 0) {
                 reply(ih->unique, -2 /*ENOENT*/, 0, 0);
@@ -231,8 +217,6 @@ void milin_main(void) {
             }
             struct fuse_entry_out e = { 0 };
             e.nodeid = dir_entries[idx].ino;
-            // dentry-кэш только для неизменяемого README: note.txt
-            // меняется, таймаут 0 заставляет ядро переспрашивать
             e.entry_valid = e.nodeid == README_INO ? 86400 : 0;
             e.attr_valid = e.entry_valid;
             fill_attr(&e.attr, e.nodeid);
@@ -261,7 +245,6 @@ void milin_main(void) {
                 reply(ih->unique, -2/*ENOENT*/, 0, 0);
                 break;
             }
-            // README только читается: запрет на запись — забота сервера
             if (ih->nodeid == README_INO && (oi->flags & 3) != O_RDONLY) {
                 reply(ih->unique, -13/*EACCES*/, 0, 0);
                 break;
@@ -319,8 +302,6 @@ void milin_main(void) {
             break;
         case FUSE_READDIR: {
             struct fuse_read_in *ri = (struct fuse_read_in *)(req_buf + sizeof(*ih));
-            // off в dirent = cookie позиции: ядро вернёт его в следующем
-            // READDIR (ctx->pos), пропускаем всё до этого cookie
             u8 *p = out_buf + sizeof(struct fuse_out_header);
             for (int i = 0; i < NDIR; i++) {
                 u64 cookie = i + 1;
@@ -340,7 +321,6 @@ void milin_main(void) {
             break;
         }
         case FUSE_ACCESS:
-            // сервер разрешает всем (allow_other, default_permissions off)
             reply(ih->unique, 0, 0, 0);
             break;
         default:

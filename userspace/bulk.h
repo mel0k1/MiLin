@@ -1,20 +1,5 @@
-// MiLin bulk (M22): bulk-путь IPC — данные в разделяемой памяти, lane
-// несёт только ссылку. Идея — memory views у Managarm: контрольные
-// сообщения ходят по lane'у (fast path: tail до ML_MAXTAIL), всё крупное
-// едет через арены. Отличие от helq-очередей (M5.1): арена не знает про
-// сообщения — это пул слотов с lock-free freelist, который любой протокол
-// навешивает на свой lane (M22: LOG_WRITEB у log-сервера). Писатель берёт
-// слот, копирует payload один раз, потребитель читает прямо из общей
-// памяти (zero copy на receive) и возвращает слот — flow control без
-// участия ядра, как и в helq.
-//
-// Freelist — односвязный LIFO в заголовке (CAS-пуш/поп, как цепочки
-// blob-слотов helq): у пары (клиент, сервер) писатель один, но код
-// честно MPMC. Будильник — futex-слово с битом: дающий ставит бит
-// (release) после публикации слота, ждущий паркуется настоящим futex'ом
-// и перепроверяет freelist после снятия бита — тот же танец, что в
-// mlq_wait_state. Таймаут 50мс (watchdog): сосед по арене мёртв в shm
-// невидим, EOF тут не бывает (M7.1).
+// bulk (M22): bulk-путь IPC — данные в разделяемой памяти, lane несёт только ссылку.
+
 #ifndef MILIN_BULK_H
 #define MILIN_BULK_H
 
@@ -49,14 +34,12 @@ static struct mlb_hdr *mlb_map_raw(int shm_fd) {
     return (struct mlb_hdr *)r;
 }
 
-// для адресатов: арена обязана быть размечена инициализатором (шиной)
 static struct mlb_hdr *mlb_map(int shm_fd) {
     struct mlb_hdr *h = mlb_map_raw(shm_fd);
     if (!h || h->magic != MLB_MAGIC) return 0;
     return h;
 }
 
-// разметка (единственный инициализатор — шина, до раздачи fd)
 static void mlb_init(struct mlb_hdr *h) {
     m_memset(h, 0, MLB_SIZE);
     h->magic = MLB_MAGIC;
@@ -67,7 +50,6 @@ static void mlb_init(struct mlb_hdr *h) {
     h->freelist = 1;
 }
 
-// ожидание свободного слота; 0 = тишина 50мс (сосед, вероятно, мёртв)
 static int mlb_wait_free(struct mlb_hdr *h, int mode) {
     for (;;) {
         if (__atomic_load_n(&h->freelist, __ATOMIC_RELAXED)) return 1;
@@ -85,7 +67,6 @@ static int mlb_wait_free(struct mlb_hdr *h, int mode) {
     }
 }
 
-// резерв слота (CAS-поп freelist); 0 = сосед не отвечает
 static int mlb_take(struct mlb_hdr *h, int mode) {
     for (;;) {
         int head = __atomic_load_n(&h->freelist, __ATOMIC_RELAXED);
@@ -100,7 +81,6 @@ static int mlb_take(struct mlb_hdr *h, int mode) {
     }
 }
 
-// вернуть слот (CAS-пуш) + будильник
 static void mlb_give(struct mlb_hdr *h, int slot) {
     int head = __atomic_load_n(&h->freelist, __ATOMIC_RELAXED);
     for (;;) {
@@ -114,7 +94,6 @@ static void mlb_give(struct mlb_hdr *h, int slot) {
         futex_wake(&h->notify);
 }
 
-// payload слота (в общей памяти: действует, пока слот не отдан)
 static void *mlb_ptr(struct mlb_hdr *h, int slot) {
     return (char *)h + MLB_HDR_OFF + (slot - 1) * MLB_SLOT;
 }

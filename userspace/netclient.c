@@ -1,7 +1,4 @@
-// /sbin/netclient (M12): демон-клиент userspace-сети. Дергает сервис
-// "net0" (netd): socket -> connect 10.0.2.2:8000 -> HTTP GET / ->
-// печать первых байт ответа. Бут-гейт M12: в слайрпе хоста на 10.0.2.2
-// слушает python http.server — TCP-стек netd ходит по настоящей сети.
+// netclient (M12): демо-клиент сервиса "net0" — HTTP GET через userspace-стек.
 
 #include "milin.h"
 #include "ipc.h"
@@ -21,15 +18,11 @@ static int lookup_net(long bus, struct ml_aux *aux) {
     return -1;
 }
 
-// один запрос-ответ без ожидания: сервер отвечает R-сообщением.
-// каждый шаг под poll с потолком: потере ответа (каскад шины) молча
-// висеть нельзя — попытка обязана упасть и передать эстафету ретраю
 static long net_rpc(long lane, u32 op, u32 h0, u32 h1, u32 h2,
                     const u8 *tail, u32 tlen, struct ml_msg *out) {
     struct ml_msg m = { ML_PROTO_NET, op, 0, 0, {0} };
     *ml_h(&m, 0) = h0; *ml_h(&m, 1) = h1; *ml_h(&m, 2) = h2;
     if (ml_send(lane, &m, tail, tlen, 0, 0) < 0) return -1;
-    // R-сообщение; push'и (DATA/EOF) здесь не ждём — их читает recv-цикл
     for (;;) {
         struct pfd { int fd; short events, revents; } pf = {
             (int)lane, 1, 0
@@ -47,8 +40,6 @@ static long net_rpc(long lane, u32 op, u32 h0, u32 h1, u32 h2,
 static u8 rbuf[8192];
 static u32 rxlen;
 
-// одна HTTP-сессия: lookup lane -> OPEN -> CONNECT -> GET -> ответ.
-// 1 — не сошлось (попытку можно повторить: шина и netd переподнимаются)
 static int http_once(long bus) {
     struct ml_aux aux;
     if (lookup_net(bus, &aux) < 0) {
@@ -65,7 +56,6 @@ static int http_once(long bus) {
     }
     u32 sid = (u32)*ml_h(&r, 0);
 
-    // 10.0.2.2:8000 (slirp -> host 127.0.0.1:8000)
     if (net_rpc(lane, NET_CONNECT, sid, 0x0A000202u, 8000, 0, 0, &r) < 0
         || r.err != ML_E_OK) {
         P("netclient: CONNECT FAIL\n");
@@ -83,7 +73,6 @@ static int http_once(long bus) {
     int got = 0, eof = 0;
     rxlen = 0;
     for (int t = 0; t < 200 && !eof; t++) {
-        // poll с таймаутом: тупой сервер не подвесит гейт навсегда
         struct pfd { int fd; short events, revents; } pf = {
             (int)lane, 1, 0
         };
@@ -103,7 +92,6 @@ static int http_once(long bus) {
         P("netclient: ответ не получен\n");
         return 1;
     }
-    // HTTP/1.0 200 (или 1.1)
     int ok200 = (rbuf[0] == 'H') && rbuf[9] == '2' && rbuf[11] == '0';
     P("netclient: HTTP-ответ: ");
     for (u32 i = 0; i < 15 && i < rxlen; i++) {
@@ -121,8 +109,6 @@ static int http_once(long bus) {
 }
 
 void milin_main(void) {
-    // M7.2-каскад убивает шину параллельно с нами: транзакция может умереть
-    // в любой фазе. Попытка = свежий коннект к шине + свежий lane + новый TCP
     for (int attempt = 0; attempt <= 3; attempt++) {
         if (attempt) sleep_ms(200);
         long bus = -1;

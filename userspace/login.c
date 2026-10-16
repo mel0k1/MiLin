@@ -1,6 +1,4 @@
-// /sbin/login (M19): проверка /etc/shadow (sha512-crypt), смена uid,
-// exec шелла. имя пользователя — argv[1] от getty, пароль — с консоли
-// с выключенным эхом (TCSETS). неверный ввод — пауза 2с и повтор подсказки.
+// login (M19): проверка /etc/shadow, смена uid, exec шелла.
 
 #include "milin.h"
 #include "crypt.h"
@@ -45,7 +43,6 @@ static int parse_dec(const char *s) {
     return v;
 }
 
-// поле idx строки /etc/passwd|shadow (разделитель ':') в dst
 static void cut_field(const char *ln, int idx, char *dst, int max) {
     dst[0] = 0;
     const char *p = ln;
@@ -91,7 +88,6 @@ static int find_passwd(const char *user, char *home, int hmax,
     return 0;
 }
 
-// из "$6$salt$hash86" достаёт salt и hash86
 static int find_shadow(const char *user, char *salt, int smax, char *enc, int emax) {
     static char buf[4096];
     long fd = sys3(SYS_open, (long)"/etc/shadow", O_RDONLY, 0);
@@ -176,8 +172,6 @@ void milin_main(void) {
     P("\n");
     if (pn < 0 || !sha512_verify(pw, salt, enc)) fail();
 
-    // utmp/wtmp пишет root ДО setuid: после смены uid запись в root-owned
-    // /var/run/utmp и /var/log/wtmp не пройдёт
     utmp_write(UTMP_USER, (int)sys3(SYS_getpid, 0, 0, 0), "console", user);
 
     sys3(SYS_setgid, gid, 0, 0);

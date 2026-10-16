@@ -1,6 +1,4 @@
 // /sbin/getty (M19): подсказка входа на консоли.
-// открывает /dev/console, забирает управляющий tty, цикл fork -> /sbin/login;
-// умерший getty супервизор перезапускает сам (M7 backoff).
 
 #include "milin.h"
 #include "utmp.h"

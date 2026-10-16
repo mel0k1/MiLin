@@ -1,11 +1,4 @@
 // /sbin/gclient (M8/M8.2): IPC-клиент, собранный с glibc (динамически, ld.so).
-// Доказывает, что ядро тянет обычный userspace: ELF-интерпретатор, stdio,
-// malloc, mmap, futex, fork+waitpid, полный набор системных вызовов.
-// M8.2 — полировка: тот же IPC-стек, что у nostdlib-клиента, но из libc:
-//   * helq-транспорт: mmap очередей + futex-паркинг + RTT-бенчмарк
-//     (userspace/helq.h общий, собирается с -DMILIN_GLIBC);
-//   * bulk 100КБ через цепочку blob-слотов — целостность меряем stored_len;
-//   * fork+waitpid: ребёнок читает FUSE-файл stdio'ем (fread/fwrite).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +12,6 @@
 #include "helq.h"     // -DMILIN_GLIBC: raw-хелперы заменяются libc-шимом
 #include "mlproto.h"
 
-// адресная арифметика как ml_addr (ipc.h): len = 4 + strlen + 1,
-// хвост адреса обязан быть нулями — иначе это ДРУГОЕ абстрактное имя
 static long ml_addr_g(struct sockaddr_un *a, const char *name) {
     memset(a, 0, sizeof(*a));
     a->sun_family = AF_UNIX;
@@ -44,8 +35,6 @@ static int bus_connect(void) {
     return -1;
 }
 
-// LOOKUP с правами на хуки: transport=ML_TR_SEQPACKET -> 1 fd (lane),
-// ML_TR_HELQ -> 2 fd (lane + shm-регион очередей)
 static int lookup_log_tr(int bus, int tr, int *hooks, int *nhooks) {
     struct ml_msg q;
     memset(&q, 0, sizeof(q));
@@ -57,7 +46,6 @@ static int lookup_log_tr(int bus, int tr, int *hooks, int *nhooks) {
         if (send(bus, &q, sizeof(q), MSG_NOSIGNAL) < 0) return -1;
         struct ml_msg r;
         struct iovec iov = { &r, sizeof(r) };
-        // creds + права + до 2 хуков: ядро прикладывает cmsg'и (SO_PASSCRED)
         char cbuf[2 * CMSG_SPACE(sizeof(int)) + CMSG_SPACE(3 * sizeof(unsigned))];
         struct msghdr mh;
         memset(&mh, 0, sizeof(mh));
@@ -106,7 +94,6 @@ static inline u64 rdtsc(void) {
     return ((u64)hi << 32) | lo;
 }
 
-// дождаться ответа (zero copy из общей памяти), вернуть ml_msg или 0
 static const struct ml_msg *helq_recv(struct mlq_in *in, u32 want) {
     for (;;) {
         struct mlq_view v;
@@ -119,7 +106,6 @@ static const struct ml_msg *helq_recv(struct mlq_in *in, u32 want) {
     }
 }
 
-// M8.2: helq-транспорт из glibc — тот же стек очередей, libc-вызовы
 static int helq_demo(int bus) {
     int hooks[4] = { -1, -1, -1, -1 }, nh = 0;
     if (lookup_log_tr(bus, ML_TR_HELQ, hooks, &nh) < 0 || nh < 2) {
@@ -143,7 +129,6 @@ static int helq_demo(int bus) {
     struct mlq_in in;
     mlq_in_init(&in, p, 1);
 
-    // RTT на очередях: futex-паркинг libc'ей
     u64 sum = 0;
     struct ml_msg w = { ML_PROTO_LOG, LOG_WRITEQ, 0, 0, {0} };
     u8 buf[sizeof(struct ml_msg)];
@@ -161,8 +146,6 @@ static int helq_demo(int bus) {
     printf("gclient: bench: helq-futex rtt avg=%llu cycles (n=128)\n",
            (unsigned long long)(sum / 128));
 
-    // M8.1: bulk 100КБ цепочкой blob-слотов; целостность подтверждает
-    // stored_len в ack — сервер получил все 4 слота как одно сообщение
     static u8 bulk[sizeof(struct ml_msg) + 102400];
     struct ml_msg bw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
     memcpy(bulk, &bw, sizeof(bw));
@@ -177,7 +160,6 @@ static int helq_demo(int bus) {
     printf("gclient: helq: bulk 100КБ цепочкой blob-слотов: stored_len=%llu\n",
            (unsigned long long)*ml_h((struct ml_msg *)r, 0));
 
-    // корректный выход: CLOSE -> сервер закрывает lane
     struct ml_msg cl = { ML_PROTO_LOG, LOG_CLOSE, 0, 0, {0} };
     memcpy(buf, &cl, sizeof(cl));
     mlq_put(&out, LOG_CLOSE, buf, sizeof(cl), MLQ_FUTEX);
@@ -226,10 +208,8 @@ int main(void) {
     printf("gclient: STATS served=%llu\n", (unsigned long long)served);
     close(lane);
 
-    // M8.2: helq-транспорт и bulk-цепочка тем же клиентом
     if (helq_demo(bus) < 0) return 1;
 
-    // M8.2: fork+waitpid — ребёнок читает/пишет FUSE-файлы stdio'ем
     pid_t c = fork();
     if (c < 0) {
         perror("gclient: fork");

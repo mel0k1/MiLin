@@ -1,10 +1,4 @@
 // /sbin/xbpstest (M14): e2e пакетного менеджера против НАСТОЯЩЕГО репо.
-// динамический glibc-бинарь: fork+exec xbps-install (LD_PRELOAD=netsh.so
-// уводит сокеты в netd через IPC; getaddrinfo резолвит по TCP:53), ждёт,
-// проверяет установленный payload. Репо — repo-default.voidlinux.org по
-// https: TLS в самом xbps (openssl из Void), подпись индекса — ключ из
-// пакета xbps (60:ae:0c:...), доверие — ca-certificates из rootfs.
-// Маркер M14 OK = реальный репо синкнулся, пакет скачан/распакован/запущен.
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -32,8 +26,6 @@ static int run(char **argv, char **env) {
 int main(void) {
     setvbuf(stdout, 0, _IONBF, 0);
 
-    // 1) синк + установка из настоящего Void-репо (адрес в /etc/xbps.d):
-    //    dash — маленький динамический шелл, glibc-зависимый
     char *env[] = {
         "LD_PRELOAD=/lib/netsh.so",
         "PATH=/usr/bin:/usr/sbin:/bin",
@@ -43,8 +35,6 @@ int main(void) {
         0
     };
     char *install[] = { "/usr/bin/xbps-install", "-S", "dash", "-y", 0 };
-    // сеть userspace переживает каскад шины (M7.2): попытки xbps-install
-    // разнесены, чтобы slirp/TLS-шум реального репо не ронял гейт
     int rc = -1;
     for (int attempt = 0; attempt <= 2; attempt++) {
         if (attempt) sleep(1);
@@ -55,13 +45,11 @@ int main(void) {
     if (rc != 0)
         return 1;
 
-    // 2) payload установлен и исполняем? (динамический, Void glibc)
     if (access("/usr/bin/dash", X_OK) != 0) {
         printf("xbpstest: /usr/bin/dash отсутствует\n");
         return 1;
     }
 
-    // 3) запуск установленного бинаря — вывод уходит в консоль
     char *dash[] = { "/usr/bin/dash", "-c",
                      "echo installed-dash-runs pid=$$ version=$0", 0 };
     rc = run(dash, env);
@@ -71,8 +59,6 @@ int main(void) {
 
     printf("M14 OK: real void repo (https) install + run over userspace network\n");
 
-    // M15: маркер персистентности на реальном корне — persistcheck
-    // следующего бута по нему доказывает, что xbps-установка легла на ext4
     mkdir("/var/milin", 0755);
     FILE *mk = fopen("/var/milin/installed", "w");
     if (mk) {

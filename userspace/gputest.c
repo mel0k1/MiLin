@@ -1,17 +1,4 @@
 // /sbin/gputest (M22): e2e mlkd-фасада amdgpu из независимого клиента.
-// Раньше фазу kernel/user крутил /init (gpu_demo в супервизоре) — placement
-// переехал сюда: у фасада один владелец, гонок с демо шины нет. Фазы:
-//   kernel : /dev/amdgpu INFO -> ALLOC -> SUBMIT -> WAIT -> FREE (kthread)
-//   deny   : placement=user -> /dev ALLOC = -ENODEV (домен уступил gpud)
-//   caps   : fork+setuid(1000): LOOKUP "gpu.amdgpu" = ML_E_PERM (world=0)
-//   user   : LOOKUP от root -> INFO/ALLOC/SUBMIT/WAIT/FREE у gpud
-//   bulk   : lane с ареной (ML_TR_BULK): SUBMITB 64КБ — командный буфер
-//            больше ML_MAXTAIL едет слотом арены, сумма dwords в ответе
-//            обязана сойтись с локальной (M22 GPU BULK OK)
-//   return : placement=kernel -> /dev ожил, gpud уступил (ML_E_PERM)
-// Шину клиент.c убивает в демо каскада M7.2 — каждая шинная фаза умеет
-// переподключиться и начаться заново.
-// Маркеры: M22 GPU DEV/DENYDEV/CAPDENY/LANE/BULK/RETURN OK, итог M22 GPU E2E OK.
 
 #include "milin.h"
 #include "ipc.h"
@@ -31,7 +18,6 @@ static long bus_conn(void) {
     }
 }
 
-// запрос через /dev: [op][payload] -> ответ (длина или -код ядра)
 static long dev_req(long fd, u8 op, const void *payload, u32 plen) {
     static u8 req[1 + sizeof(struct mlgpu_submit_in) + 8 * 4];
     req[0] = op;
@@ -41,7 +27,6 @@ static long dev_req(long fd, u8 op, const void *payload, u32 plen) {
     return sys3(SYS_read, fd, (long)rbuf, sizeof(rbuf));
 }
 
-// запрос через шину: GPU_REQ(tail=[op][payload]) -> GPU_REQ_R
 static long lane_err;
 
 static long lane_req(long lane, u8 op, const void *payload, u32 plen) {
@@ -86,7 +71,6 @@ static long gpu_place(const char *pl, long plen) {
     return r == plen ? 0 : -1;
 }
 
-// полный цикл ALLOC -> SUBMIT -> WAIT -> FREE через указанный транспорт
 static int gpu_cycle(long fd, long lane, u32 alloc_size) {
     struct mlgpu_alloc_in a = { alloc_size };
     long r = lane ? lane_req(lane, MLGPU_ALLOC, &a, sizeof(a))
@@ -130,7 +114,6 @@ static int info_ok(long fd, long lane) {
     return m_strncmp(o.name, "amdgpu", 7) == 0 && o.api == MLGPU_API;
 }
 
-// фаза kernel: полный цикл через kthread домена; 0 = OK
 static int phase_kernel(long fd) {
     if (!info_ok(fd, 0)) {
         P("gputest: info (dev): FAIL\n");
@@ -144,7 +127,6 @@ static int phase_kernel(long fd) {
     return 0;
 }
 
-// фаза deny: домен в 'user' отклоняет /dev-запросы (-ENODEV = 19)
 static int phase_deny(long fd) {
     struct mlgpu_alloc_in a = { 4096 };
     if (dev_req(fd, MLGPU_ALLOC, &a, sizeof(a)) != -19) {
@@ -155,8 +137,6 @@ static int phase_deny(long fd) {
     return 0;
 }
 
-// фаза caps: uid 1000 lane не получает (политика gpud: world=0)
-// 0 = OK (ребёнок подтвердил отказ); шинные проблемы ретраятся снаружи
 static int phase_caps(long bus) {
     int pid = sys3(SYS_fork, 0, 0, 0);
     if (pid == 0) {
@@ -174,7 +154,6 @@ static int phase_caps(long bus) {
     return 0;
 }
 
-// фаза user: lane до gpud, полный цикл, mode обязан быть FACADE
 static int phase_lane(long bus, long *lane_out) {
     long lane = lookup_gpu_lane(bus);
     if (lane < 0) return 1;
@@ -197,8 +176,6 @@ static int phase_lane(long bus, long *lane_out) {
     return 0;
 }
 
-// фаза bulk: lane с ареной (ML_TR_BULK) — SUBMITB 64КБ через общий слот.
-// 0 = OK; шинные проблемы ретраются снаружи
 static int phase_bulk(long bus) {
     struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
     m_memcpy(q.head, "gpu.amdgpu", 11);
@@ -228,7 +205,6 @@ static int phase_bulk(long bus) {
         return 1;
     }
 
-    // INFO по bulk-lane: фасад жив и это gpud
     if (!info_ok(-1, lane)) {
         sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
         sys3(SYS_close, lane, 0, 0);
@@ -246,7 +222,6 @@ static int phase_bulk(long bus) {
     u64 h;
     m_memcpy(&h, rbuf, sizeof(h));
 
-    // слот арены + паттерн: dwords 1..BULK_NDW, сумма известна заранее
     int slot = mlb_take(ar, MLB_WAIT);
     if (!slot) {
         P("gputest: bulk: слот не выделен (арена молчит)\n");
@@ -258,7 +233,6 @@ static int phase_bulk(long bus) {
     for (u32 i = 0; i < BULK_NDW; i++) cw[i] = i + 1;
     u64 want = (u64)BULK_NDW * (BULK_NDW + 1) / 2;
 
-    // SUBMITB: tail = [op][submit_in], ссылка в head (h[0]=слот, h[1]=байты)
     static u8 tb[1 + sizeof(struct mlgpu_submit_in)];
     tb[0] = MLGPU_SUBMITB;
     struct mlgpu_submit_in s = { h, BULK_NDW, 0 };
@@ -294,7 +268,6 @@ static int phase_bulk(long bus) {
         return 1;
     }
 
-    // WAIT + FREE — малые запросы по тому же lane (head нулевой = не bulk)
     struct mlgpu_wait_in w = { so.fence };
     if (lane_req(lane, MLGPU_WAIT, &w, sizeof(w))
         != sizeof(struct mlgpu_wait_out)) {
@@ -328,9 +301,6 @@ static int phase_bulk(long bus) {
     return 0;
 }
 
-// фаза return: домен вернул фасад — /dev ожил, gpud уступил (ML_E_PERM).
-// lane свежий: gpud однопоточный, serve_lane живёт до EOF — предыдущие
-// lane'ы обязаны быть закрыты (M22)
 static int phase_return(long fd, long bus) {
     if (gpu_place("kernel\n", 7)) return 1;
     if (!info_ok(fd, 0)) return 1;
@@ -366,7 +336,6 @@ void milin_main(void) {
     }
     if (phase_deny(fd)) sys3(SYS_exit, 1, 0, 0);
 
-    // caps: шину могли прибить в демо M7.2 — переподключаемся и заново
     for (int attempt = 0;; attempt++) {
         if (!phase_caps(bus)) break;
         if (attempt > 5) sys3(SYS_exit, 1, 0, 0);
@@ -385,11 +354,8 @@ void milin_main(void) {
         if (bus < 0) sys3(SYS_exit, 1, 0, 0);
         P("gputest: lane: ретрай на новой шине\n");
     }
-    // gpud однопоточный: serve_lane живёт до EOF — освобождаем его
-    // для следующего lane'а (bulk-фазы), иначе дедлок на BUS_LANE_REQ
     sys3(SYS_close, lane, 0, 0);
 
-    // M22: bulk-submit — командный буфер больше ML_MAXTAIL едет ареной
     for (int attempt = 0;; attempt++) {
         if (!phase_bulk(bus)) break;
         if (attempt > 5) sys3(SYS_exit, 1, 0, 0);

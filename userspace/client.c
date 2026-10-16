@@ -1,16 +1,4 @@
 // /sbin/client (M5.2): непривилегированный демо-клиент.
-// Живёт в initramfs как обычный oneshot-сервис из манифеста
-// /etc/milin/client.svc; супервизор читает его статус как вердикт бута.
-// Проверяет весь стек MiLin:
-//   * M5-регрессия: seqpacket WRITE x2 + ack через шину
-//   * M5.1/M8: helq-демо + бенчмарки транспортов (маркеры ipc-bench для M6)
-//   * M7: capability (RESET отклонён без ML_CAP_ADMIN), отказ-инъекция
-//     SIGKILL'ом log-сервера, revoke lane'а мертвеца, каскад при смерти шины
-//   * M8: большой WRITE через blob-слот; glibc-клиент /sbin/gclient
-//   * M8.1: bulk без потолка одного слота — WRITE 100КБ цепочкой blob-слотов
-//   * M9.1: FUSE читает содержимое README
-//   * M5.2: FUSE_WRITE/READ на /mnt/note.txt + readdir по /mnt
-// Первым делом сбрасывает uid на 1000 (MULTIUSER).
 
 #include "milin.h"
 #include "ipc.h"
@@ -26,7 +14,6 @@ static struct stat64 {
     u64 unused[3];
 } st_buf;
 
-// --- бенчмарк (M5.1): числа уезжают в docs/ отчёта M6 ---
 #define BENCH_N 256    // RTT-итераций на транспорт
 #define BENCH_K 64     // enqueue-пачка (один чанк = одна партия)
 #define BENCH_BN 64    // M8: RTT крупных (blob-слот)
@@ -42,7 +29,6 @@ static inline u64 rdtsc(void) {
     return ((u64)hi << 32) | lo;
 }
 
-// дождаться шины (форк не гарантирует порядок старта)
 static long wait_bus(void) {
     for (int tries = 0; ; tries++) {
         long bus = ml_connect("milin-bus");
@@ -52,11 +38,6 @@ static long wait_bus(void) {
     }
 }
 
-// LOOKUP(name, transport) -> lane (+ shm для helq); повторяет попытки.
-// имя живёт в head[0..15] (строка), transport — в head-слоте 2
-// (слот 0 занят именем: bragi-поля не должны пересекаться).
-// M7: шина возвращает права на lane (head-слот 0 ответа) — capability
-// маска, выданная по uid-политике сервера
 static int lookup_log(long bus, int transport, struct ml_aux *aux, u32 *rights) {
     struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
     m_memcpy(q.head, "log", 4);
@@ -75,7 +56,6 @@ static int lookup_log(long bus, int transport, struct ml_aux *aux, u32 *rights) 
     return -1;
 }
 
-// --- M5: классический обмен поверх SOCK_SEQPACKET ---
 static int demo_seqpacket(long bus, int bench) {
     struct ml_aux aux;
     if (lookup_log(bus, ML_TR_SEQPACKET, &aux, 0) < 0) {
@@ -85,8 +65,6 @@ static int demo_seqpacket(long bus, int bench) {
     P("client: seqpacket: lookup \"log\" -> lane (fd пришёл SCM_RIGHTS)\n");
     long lane = aux.hooks[0];
 
-    // функциональные WRITE: только в demo-режиме; bench-lane чистый,
-    // чтобы счётчик сервера сходился с арифметикой клиента
     if (!bench) {
         const char *m1 = "привет из MiLin: IPC в стиле bragi/mbus";
         const char *m2 = "серверы общаются сообщениями, а не вызовами ядра";
@@ -108,7 +86,6 @@ static int demo_seqpacket(long bus, int bench) {
     }
 
     if (bench) {
-        // RTT: sendmsg+recvmsg на каждый пинг-понг — ядро в data path
         u64 sum = 0;
         for (int i = 0; i < BENCH_N; i++) {
             u64 t0 = rdtsc();
@@ -131,7 +108,6 @@ static int demo_seqpacket(long bus, int bench) {
     return 0;
 }
 
-// --- M5.1: обмен поверх асинхронных очередей в разделяемой памяти ---
 static int demo_helq(long bus) {
     struct ml_aux aux;
     if (lookup_log(bus, ML_TR_HELQ, &aux, 0) < 0 || aux.nhooks < 2) {
@@ -154,8 +130,6 @@ static int demo_helq(long bus) {
     struct mlq_in in;
     mlq_in_init(&in, p, 1);        // ответы
 
-    // helper: отправить bragi-сообщение ОДНИМ элементом (ml_msg + tail
-    // в одном payload — сервер парсит их как единое целое)
     static u8 _sbuf[sizeof(struct ml_msg) + ML_MAXTAIL];
     #define MLQ_SEND(msgid, tptr, tlen, mode) do { \
         struct ml_msg _w = { ML_PROTO_LOG, (msgid), 0, 0, {0} }; \
@@ -165,7 +139,6 @@ static int demo_helq(long bus) {
         mlq_flush(&out); \
     } while (0)
 
-    // функция: дождаться ответа нужного типа (zero copy из общей памяти)
     #define MLQ_RECV(want, mode, outvar) do { \
         for (;;) { \
             struct mlq_view _v; \
@@ -179,7 +152,6 @@ static int demo_helq(long bus) {
         } \
     } while (0)
 
-    // функциональный демо-цикл: сервер печатает с uid (creds через шину)
     const char *h1 = "асинхронные очереди в разделяемой памяти: zero copy";
     const char *h2 = "будильник — futex, ядро в data path не участвует";
     const struct ml_msg *r;
@@ -200,8 +172,6 @@ static int demo_helq(long bus) {
 
     u64 sum = 0, t0 = 0, dt = 0;
 
-    // M8: большой WRITE — tail 20КБ уезжает через blob-слот, в очереди
-    // только ссылка; сервер печатает первые 64 байта и размер
     static u8 bigbuf[sizeof(struct ml_msg) + BENCH_BIG];
     struct ml_msg bw = { ML_PROTO_LOG, LOG_WRITE, 0, 0, {0} };
     m_memcpy(bigbuf, &bw, sizeof(bw));
@@ -218,8 +188,6 @@ static int demo_helq(long bus) {
     print_dec_n(BENCH_BIG);
     P(" байт уехал через blob-слот (в очереди — только ссылка)\n");
 
-    // M8: RTT крупного сообщения (ровно 32КБ через blob-слот: заголовок
-    // bragi внутри payload, поэтому tail = MLQ_BLOB - sizeof(ml_msg))
     static u8 blobbuf[MLQ_BLOB];
     struct ml_msg qb = { ML_PROTO_LOG, LOG_WRITEQ, 0, 0, {0} };
     m_memcpy(blobbuf, &qb, sizeof(qb));
@@ -236,8 +204,6 @@ static int demo_helq(long bus) {
     print_dec_n(sum / BENCH_BN);
     P(" cycles/msg (blob-слот, n=64)\n");
 
-    // M8: конвейер крупных — 32КБ-сообщения с 4 в полёте (больше нельзя:
-    // blob-слотов и чанков ответов по 4, недренированные ответы = дедлок)
     t0 = rdtsc();
     for (int i = 0; i < BENCH_TN / 4; i++) {
         for (int j = 0; j < 4; j++)
@@ -250,9 +216,6 @@ static int demo_helq(long bus) {
     print_dec_n(dt / BENCH_TN);
     P(" cycles/msg (конвейер, 4 в полёте, n=32)\n");
 
-    // M8.1: bulk-путь — сообщение крупнее одного слота едет ЦЕПОЧКОЙ
-    // blob-слотов (до 128КБ); демо: WRITE 100КБ — это 4 слота, весь запас
-    // направления, в очереди по-прежнему одна ссылка
     static u8 bulkbuf[sizeof(struct ml_msg) + BULK_BYTES];
     m_memcpy(bulkbuf, &bw, sizeof(bw));
     for (int i = 0; i < BULK_BYTES; i++)
@@ -267,7 +230,6 @@ static int demo_helq(long bus) {
     print_dec_n(BULK_BYTES);
     P(" байт уехал цепочкой из 4 blob-слотов (в очереди — одна ссылка)\n");
 
-    // RTT bulk-сообщением (64КБ = 3 слота + заголовок) — цена большого пути
     m_memcpy(bulkbuf, &qb, sizeof(qb));
     m_memset(bulkbuf + sizeof(qb), 'x', BENCH_CLEN);
     sum = 0;
@@ -281,7 +243,6 @@ static int demo_helq(long bus) {
     print_dec_n(sum / BENCH_CN);
     P(" cycles/msg (цепочка blob-слотов, n=32)\n");
 
-    // RTT futex-режим: парковка настоящим futex
     sum = 0;
     for (int i = 0; i < BENCH_N; i++) {
         u64 t0 = rdtsc();
@@ -293,8 +254,6 @@ static int demo_helq(long bus) {
     print_dec_n(sum / BENCH_N);
     P(" cycles (парковка futex'ом, n=256)\n");
 
-    // RTT yield-режим: поллинг с sched_yield — ни одного syscall'а
-    // на сообщение кроме yield'а; это потолок скорости транспорта
     sum = 0;
     for (int i = 0; i < BENCH_N; i++) {
         u64 t0 = rdtsc();
@@ -306,8 +265,6 @@ static int demo_helq(long bus) {
     print_dec_n(sum / BENCH_N);
     P(" cycles (поллинг+yield, n=256)\n");
 
-    // enqueue-пачка: K сообщений в один чанк одним flush — цена ассинхронной
-    // постановки (у Managarm так ездят SQ-элементы: батчами, без ожидания)
     t0 = rdtsc();
     for (int i = 0; i < BENCH_K; i++) {
         struct ml_msg w = { ML_PROTO_LOG, LOG_WRITEQ, 0, 0, {0} };
@@ -321,7 +278,6 @@ static int demo_helq(long bus) {
     print_dec_n(dt / BENCH_K);
     P(" cycles/msg (пачка в один чанк, k=64)\n");
 
-    // корректный выход: CLOSE -> сервер закрывает lane
     MLQ_SEND(LOG_CLOSE, 0, 0, MLQ_FUTEX);
     MLQ_RECV(LOG_CLOSE_R, MLQ_FUTEX, r);
     sys6(SYS_munmap, (long)p, MLQ_SIZE, 0, 0, 0, 0);
@@ -332,11 +288,9 @@ static int demo_helq(long bus) {
     #undef MLQ_RECV
 }
 
-// --- M5.2: FUSE как настоящая ФС: WRITE, READ, readdir ---
 static int demo_fuse(void) {
     static const char msg[] = "записано клиентом через FUSE_WRITE (MiLin M5.2)\n";
 
-    // /mnt уже смонтирован (M4-регрессия выше по стеку его ждала)
     long fd = sys3(SYS_open, (long)"/mnt/note.txt", O_RDWR, 0);
     if (fd < 0) {
         P("client: open /mnt/note.txt: FAIL\n");
@@ -364,7 +318,6 @@ static int demo_fuse(void) {
     print_dec_n(sizeof(msg) - 1);
     P(" байт, прочитано обратно — совпало\n");
 
-    // readdir: getdents64 по /mnt — список приходит от FUSE-сервера
     long dfd = sys3(SYS_open, (long)"/mnt", O_RDONLY | O_DIRECTORY, 0);
     if (dfd < 0) {
         P("client: open /mnt: FAIL\n");
@@ -392,7 +345,6 @@ static int demo_fuse(void) {
     }
     P("client: readdir: README + note.txt найдены: OK\n");
 
-    // атрибуты: размер после WRITE должен доехать до stat (таймаут 0)
     if (sys3(SYS_stat, (long)"/mnt/note.txt", (long)&st_buf, 0) != 0 ||
         st_buf.size != sizeof(msg) - 1) {
         P("client: stat /mnt/note.txt: FAIL\n");
@@ -404,13 +356,7 @@ static int demo_fuse(void) {
     return 0;
 }
 
-// --- M22: bulk-путь: payload в арене, lane несёт ссылку ---
-// слот: writer копирует 128К один раз, сервер читает прямо из shm и
-// возвращает слот до ack (flow control); stored_len в ack подтверждает,
-// сервер получил ссылку и длину, печат в лог — байты реально прошли
 static int demo_bulk(void) {
-    // своя шина: run() закрывает свою после каскада (gclient/FUSE шине
-    // не нужны, bulk-демо — последний клиент шины)
     long bus = wait_bus();
     if (bus < 0) {
         P("client: bulk: шина не отвечает\n");
@@ -477,8 +423,6 @@ static int demo_bulk(void) {
     P(" cycles/write)\n");
     P("M22 BULK OK\n");
 
-    // выход по контракту M5-деmo: seqpacket-lane закрывается EOF'ом
-    // (арена умирает вместе с последним маппингом — шина unlink'нула имя)
     sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
     sys3(SYS_close, lane, 0, 0);
     sys3(SYS_close, bus, 0, 0);
@@ -486,7 +430,6 @@ static int demo_bulk(void) {
 }
 
 static int run(void) {
-    // непривилегированный пользователь: MULTIUSER вернулся
     if (sys3(SYS_setuid, 1000, 0, 0) != 0) {
         P("client: setuid(1000): FAIL\n");
         return 1;
@@ -500,24 +443,15 @@ static int run(void) {
         P("client: IPC: шина не отвечает\n");
         return 1;
     }
-    // M7.2: SO_PASSCRED на моём конце — ядро прикладывает к ответам шины
-    // ЕЁ pid: узнаю, кого убивать в демо каскада, у самой шины не спрашивая
     ml_passcred(bus);
 
-    // 1) M5-регрессия: seqpacket-обмен (без бенчмарка)
     if (demo_seqpacket(bus, 0)) return 1;
     P("client: M5-регрессия (seqpacket WRITE x2 + ack): OK\n");
 
-    // 2) M5.1: helq-демо + бенчмарки очередей
     if (demo_helq(bus)) return 1;
 
-    // 3) бенчмарк seqpacket: те же RTT, что у очередей — честное сравнение
     if (demo_seqpacket(bus, 1)) return 1;
 
-    // 4) контрольная STATS: суммарный счётчик сервера
-    //    2 (M5) + 2 (helq демо) + 1 (big WRITE) + 1 (bulk WRITE)
-    //    + 3*BENCH_N (RTT x3) + BENCH_K (пачка) + BENCH_BN (blob RTT)
-    //    + BENCH_TN (blob пачка) + BENCH_CN (bulk RTT)
     struct ml_aux aux;
     u32 cap = 0;
     if (lookup_log(bus, ML_TR_SEQPACKET, &aux, &cap) < 0) {
@@ -537,11 +471,8 @@ static int run(void) {
     P("client: STATS served=");
     print_dec((long)*ml_h(&sr, 0));
     P(": все сообщения доставлены\n");
-    // M7.2: pid шины — из kernel-creds на её ответах (подделать нельзя)
     u32 bus_pid = aux.has_cred ? aux.cred.pid : 0;
 
-    // 5) M7: capability-демо. uid 1000 получил от шины только world-права:
-    //    RESET — админ-операция (ML_CAP_ADMIN), сервер обязан отклонить
     P("client: capability: права на lane: 0x");
     print_hex_flat(cap);
     P(" (выдала шина по uid-политике сервера)\n");
@@ -557,10 +488,6 @@ static int run(void) {
     P("client: capability: RESET отклонён (ML_E_PERM, нет ML_CAP_ADMIN): OK\n");
     sys3(SYS_close, aux.hooks[0], 0, 0);
 
-    // 6) M7: отказоустойчивость. Клиент узнаёт pid log-сервера через
-    //    WHEREIS, убивает его SIGKILL'ом (одинаковый uid — разрешено),
-    //    супервизор обязан перезапустить сервер; клиент ретраями LOOKUP
-    //    дожидается нового экземпляра и продолжает работу на новом lane'е
     struct ml_msg wq = { ML_PROTO_BUS, BUS_WHEREIS, 0, 0, {0} };
     m_memcpy(wq.head, "log", 4);
     if (ml_send(bus, &wq, 0, 0, 0, 0) < 0) return 1;
@@ -602,13 +529,8 @@ static int run(void) {
     P("client: fault: WRITE на новый lane подтверждён — автоперезапуск работает\n");
     sys3(SYS_close, a2.hooks[0], 0, 0);
 
-    // 7) M7.1: revoke capability при смерти клиента. Жертва берёт helq-lane
-    //    и паркуется; шина видит её смерть (EOF на конне) и шлёт серверу
-    //    REVOKE, сервер отзывает права (сторож очереди + sig0). Без этого
-    //    мёртвый клиент навсегда держал бы lane и права на него
     int vpid = sys3(SYS_fork, 0, 0, 0);
     if (vpid == 0) {
-        // жертва: свой конн к шине (родительский не трогаем), lane, WRITE, парковка
         long vbus = wait_bus();
         if (vbus >= 0) {
             struct ml_aux vaux;
@@ -640,7 +562,6 @@ static int run(void) {
     int vst = 0;
     sys5(SYS_wait4, vpid, (long)&vst, 0, 0, 0); // реап: иначе зомби сбивает sig0
 
-    // проверка: сервер обязан отпустить мёртвый lane и обслужить новый
     struct ml_aux nxaux;
     u32 nxr = 0;
     if (lookup_log(bus, ML_TR_HELQ, &nxaux, &nxr) < 0 || nxaux.nhooks < 2) {
@@ -676,8 +597,6 @@ static int run(void) {
         }
         break;
     }
-    // чистое завершение helq-сессии: без CLOSE сервер так и сидел бы в
-    // serve_queue_lane живого родителя и не увидел бы смерть шины (M7.2)
     static u8 cbuf2[sizeof(struct ml_msg)];
     struct ml_msg cl = { ML_PROTO_LOG, LOG_CLOSE, 0, 0, {0} };
     m_memcpy(cbuf2, &cl, sizeof(cl));
@@ -695,16 +614,10 @@ static int run(void) {
     sys3(SYS_close, nxaux.hooks[0], 0, 0);
     P("client: revoke: права мертвеца отозваны, сервер обслужил новый lane: OK\n");
 
-    // 8) M7.2: каскад при смерти шины. Шина — TCB, но её смерть — не
-    //    конец: супервизор перезапускает шину, log-сервер сам встаёт в
-    //    строй (его state — его собственный), клиент переподключается
     P("client: cascade: убиваю ШИНУ (pid ");
     print_dec_n(bus_pid);
     P(") — система должна самоисцелиться\n");
     sys3(SYS_kill, bus_pid, SIGKILL, 0);
-    // SIGKILL не мгновенен: пока ядро не добьёт процесс, его слушатель
-    // ещё открыт и конн туда «успешен». Жду ESRCH (смерть+реап — супервизор),
-    // после него подключиться можно только к НОВОЙ шине
     for (int i = 0; i < 200; i++) {
         if (sys3(SYS_kill, bus_pid, 0, 0) != 0) break;
         sleep_ms(10);
@@ -717,7 +630,6 @@ static int run(void) {
     }
     P("client: cascade: шина перезапущена супервизором, клиент переподключился\n");
 
-    // перерегистрировавшийся log-сервер обязан быть в новой шине
     struct ml_aux caux;
     u32 ccap = 0;
     if (lookup_log(bus, ML_TR_SEQPACKET, &caux, &ccap) < 0) {
@@ -737,8 +649,6 @@ static int run(void) {
         P("client: cascade: ack FAIL\n");
         return 1;
     }
-    // контроль state: 1 (после смерти сервера) + 1 (жертва) + 1 (revoke-lane)
-    // + 1 (каскадный WRITE); счётчик пережил и ту, и другую смерть
     struct ml_msg cs = { ML_PROTO_LOG, LOG_STATS, 0, 0, {0} };
     ml_send(caux.hooks[0], &cs, 0, 0, 0, 0);
     struct ml_msg csr;
@@ -751,8 +661,6 @@ static int run(void) {
     sys3(SYS_close, caux.hooks[0], 0, 0);
     sys3(SYS_close, bus, 0, 0);
 
-    // 9) M8: glibc в userspace — динамический клиент (ld.so + libc.so.6:
-    //    ELF-интерпретатор, stdio, malloc) делает тот же IPC через шину
     P("client: glibc: запускаю /sbin/gclient (динамический)\n");
     int gpid = sys3(SYS_fork, 0, 0, 0);
     if (gpid == 0) {
@@ -768,7 +676,6 @@ static int run(void) {
     }
     P("client: glibc: gclient OK — динамический userspace работает\n");
 
-    // M9.1: FUSE читает содержимое, а не только метаданные
     long rfd = sys3(SYS_open, (long)"/mnt/README", 0 /*O_RDONLY*/, 0);
     if (rfd < 0) {
         P("client: open /mnt/README: FAIL\n");
@@ -791,11 +698,8 @@ static int run(void) {
     }
     P("client: FUSE-регрессия + чтение содержимого: OK\n");
 
-    // 10) M5.2: WRITE/READ/readdir поверх той же ФС
     if (demo_fuse()) return 1;
 
-    // 11) M22: bulk-путь на seqpacket-lane: данные в арене слотов,
-    // lane несёт только ссылку (fast/bulk split)
     if (demo_bulk()) return 1;
 
     P("client: IPC-демо + capability + отказ-инъекция + FUSE: OK\n");

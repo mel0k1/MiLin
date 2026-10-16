@@ -1,24 +1,10 @@
 // MiLin IPC (M5): микроядерные сообщения поверх простого транспорта.
-//
-// Идея подсмотрена у Managarm, упрощена и смешана с классическим IPC:
-//   * bragi (managarm/protocols): сообщение = заголовок с идентификатором
-//     + inline-поля (head) + переменная часть (tail) + хэндлы (hooks).
-//   * mbus: именованный реестр серверов. Сервер делает REGISTER(name),
-//     клиент LOOKUP(name) и получает lane-хэндл для прямого общения
-//     (аналог GetRemoteLane); реестр сам создаёт соединение.
-//   * Hel-lane: канал endpoint-to-endpoint, по которому ходят сообщения.
-//
-// Транспорт — самый простой из возможных: AF_UNIX SOCK_SEQPACKET.
-// Одно сообщение = один пакет: граница сообщения атомарна, как в
-// микроядре. Хэндлы — файловые дескрипторы, передаются SCM_RIGHTS.
-// Никакой общей памяти и синхронизации: ядро очередит пакеты само.
 #ifndef MILIN_IPC_H
 #define MILIN_IPC_H
 
 #include "milin.h"
 #include "mlproto.h"
 
-// --- syscall-номера (x86_64) ---
 #define SYS_socket    41
 #define SYS_connect   42
 #define SYS_accept    43
@@ -47,16 +33,13 @@
 #define SIGTERM        15
 #define SIGKILL        9
 
-// --- futex: примитив парковки очередей (аналог HelFutex из Managarm) ---
 #define FUTEX_WAIT 0
 #define FUTEX_WAKE 1
 
 static int futex_wait(volatile int *uaddr, int val) {
-    // таймаут NULL = ждать бесконечно; EAGAIN = значение изменилось
     return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAIT, val, 0, 0, 0);
 }
 
-// паркинг с будильником (M7.1): ETIMEDOUT (-110) = тишина ms миллисекунд
 static int futex_wait_to(volatile int *uaddr, int val, long ms) {
     struct { long sec, nsec; } t = { 0, ms * 1000000L };
     return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAIT, val, (long)&t, 0, 0);
@@ -65,7 +48,6 @@ static int futex_wake(volatile int *uaddr) {
     return (int)sys6(SYS_futex, (long)uaddr, FUTEX_WAKE, 1, 0, 0, 0);
 }
 
-// --- credentials (ядро проверяет само, SCM_CREDENTIALS) ---
 struct ucred { u32 pid, uid, gid; };
 
 static int ml_passcred(long fd) {
@@ -103,8 +85,6 @@ struct cmsghdr {
 #define CMSG_SPACE(a)   (CMSG_ALIGN(a) + CMSG_ALIGN(sizeof(struct cmsghdr)))
 #define CMSG_LEN(a)     (CMSG_ALIGN(sizeof(struct cmsghdr)) + (a))
 
-// побочные данные recvmsg: hooks (SCM_RIGHTS) + creds (SCM_CREDENTIALS).
-// creds ставит ядро (SO_PASSCRED) — клиент их подделать не может.
 struct ml_aux {
     int hooks[ML_MAXHOOKS];
     int nhooks;
@@ -112,9 +92,7 @@ struct ml_aux {
     int has_cred;
 };
 
-// --- транспорт ---
 
-// абстрактное имя: namespace сокетов, файл в ФС не нужен
 static long ml_addr(struct sockaddr_un *a, const char *name) {
     m_memset(a, 0, sizeof(*a)); // хвост адреса обязан быть нулями, а не стеком
     a->family = AF_UNIX;
@@ -129,7 +107,6 @@ static long ml_socket(void) {
     return sys5(SYS_socket, AF_UNIX, SOCK_SEQPACKET, 0, 0, 0);
 }
 
-// создать lane, слушающий абстрактное имя (для реестра)
 static long ml_listen(const char *name) {
     struct sockaddr_un a;
     long len = ml_addr(&a, name);
@@ -157,7 +134,6 @@ static long ml_socketpair(int sv[2]) {
     return sys5(SYS_socketpair, AF_UNIX, SOCK_SEQPACKET, 0, (long)sv, 0);
 }
 
-// отправить сообщение: head + tail + хэндлы одним атомарным пакетом
 static int ml_send(long fd, struct ml_msg *m, const void *tail, u32 tlen,
                    const int *hooks, int nhooks) {
     m->tail_len = tlen;
@@ -180,14 +156,10 @@ static int ml_send(long fd, struct ml_msg *m, const void *tail, u32 tlen,
         mh.msg_control = cbuf;
         mh.msg_controllen = CMSG_SPACE(nhooks * 4);
     }
-    // MSG_NOSIGNAL обязателен: lane может оказаться мёртвым (сервер убит,
-    // клиент ушёл) — SIGPIPE вместо EPIPE убил бы шину (M7)
     long r = sys3(SYS_sendmsg, fd, (long)&mh, MSG_NOSIGNAL);
     return (int)r;
 }
 
-// получить сообщение (блокирующе); 0 = канал закрыт (EOF)
-// aux (может быть 0): разбирает ВСЕ cmsg — права (hooks) и creds (uid/pid)
 static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
                    struct ml_aux *aux) {
     struct iovec iov[2];
@@ -195,7 +167,6 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
     iov[n].base = m; iov[n].len = sizeof(*m); n++;
     if (tail) { iov[n].base = tail; iov[n].len = tailmax; n++; }
 
-    // буфер под SCM_RIGHTS и SCM_CREDENTIALS сразу (два cmsg)
     char cbuf[2 * CMSG_SPACE(ML_MAXHOOKS * 4)];
     struct msghdr mh;
     __builtin_memset(&mh, 0, sizeof(mh));
@@ -209,7 +180,6 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
     long r = sys3(SYS_recvmsg, fd, (long)&mh, 0);
     if (r <= 0) return (int)r;
     if (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
-        // сообщение не влезло: доставленные fd обязаны быть закрыты
         char *c = cbuf, *end = cbuf + sizeof(cbuf);
         while (c + sizeof(struct cmsghdr) <= end) {
             struct cmsghdr *cm = (struct cmsghdr *)c;
@@ -228,7 +198,6 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
 
     if (r > (long)sizeof(*m)) m->tail_len = (u32)(r - sizeof(*m));
 
-    // шаг по цепочке cmsg: могут прийти и права, и creds
     char *c = cbuf, *end = cbuf + sizeof(cbuf);
     while (c + sizeof(struct cmsghdr) <= (char *)mh.msg_control + mh.msg_controllen
            && c + sizeof(struct cmsghdr) <= end) {
@@ -249,6 +218,5 @@ static int ml_recv(long fd, struct ml_msg *m, void *tail, u32 tailmax,
     return (int)r;
 }
 
-// протоколы (BUS_*/LOG_*/ML_TR_*) и формат ml_msg — в mlproto.h
 
 #endif
