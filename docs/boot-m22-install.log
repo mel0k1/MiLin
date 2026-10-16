@@ -5,8 +5,7 @@ iPXE (https://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+1EFC6A20+1EF06A20 CA00
 Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
 
 
-Booting from ROM...
-c[?7l[2JLinux version 7.2.0+ (z@c-6ad1a28b-145cf406-d68d73f59033) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #5 SMP PREEMPT Fri Oct 16 05:44:29 UTC 2026
+Booting from ROM..c[?7l[2JLinux version 7.2.0+ (z@c-6ad2267f-145cf406-aa42b31e027a) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #3 SMP PREEMPT Fri Oct 16 15:41:46 UTC 2026
 Command line: console=ttyS0 panic=-1 memmap=4M$0x8000000 install=/dev/sda
 BIOS-provided physical RAM map:
 BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff]  System RAM
@@ -46,7 +45,7 @@ tsc: Fast TSC calibration failed
 last_pfn = 0x1ffdf max_arch_pfn = 0x400000000
 x86/PAT: PAT support disabled because CONFIG_X86_PAT is disabled in the kernel.
 x86/PAT: Configuration [0-7]: WB  WT  UC- UC  WB  WT  UC- UC  
-RAMDISK: [mem 0x1e510000-0x1ffcffff]
+RAMDISK: [mem 0x1e515000-0x1ffcffff]
 ACPI: Early table checksum verification disabled
 ACPI: RSDP 0x00000000000F52B0 000014 (v00 BOCHS )
 ACPI: RSDT 0x000000001FFE248A 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
@@ -127,9 +126,9 @@ APIC: Switch to symmetric I/O mode setup
 ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
 tsc: Unable to calibrate against PIT
 tsc: using HPET reference calibration
-tsc: Detected 3199.983 MHz processor
-clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e203a1d667, max_idle_ns: 440795351909 ns
-Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.96 BogoMIPS (lpj=12799932)
+tsc: Detected 3199.986 MHz processor
+clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e203cb6466, max_idle_ns: 440795258295 ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.97 BogoMIPS (lpj=12799944)
 Last level iTLB entries: 4KB 512, 2MB 255, 4MB 127
 Last level dTLB entries: 4KB 512, 2MB 255, 4MB 127, 1GB 0
 mitigations: Enabled attack vectors: SMT mitigations: off
@@ -148,13 +147,13 @@ rcu: 	Max phase no-delay instances is 1000.
 smp: Bringing up secondary CPUs ...
 smpboot: x86: Booting SMP configuration:
 .... node  #0, CPUs:      #1 #2 #3
-calibrate_delay_direct() dropping max bogoMips estimate 4 = 160054310
-calibrate_delay_direct() failed to get a good estimate for loops_per_jiffy.
-Probably due to long platform interrupts. Consider using "lpj=" boot option.
-calibrate_delay_direct() dropping max bogoMips estimate 3 = 51201975
+calibrate_delay_direct() dropping min bogoMips estimate 4 = 9914761
+calibrate_delay_direct() dropping min bogoMips estimate 3 = 63889643
+calibrate_delay_direct() dropping min bogoMips estimate 2 = 9808923
+calibrate_delay_direct() dropping max bogoMips estimate 0 = 15801478
 smp: Brought up 1 node, 4 CPUs
-smpboot: Total of 4 processors activated (25579.02 BogoMIPS)
-Memory: 468140K/519668K available (6210K kernel code, 841K rwdata, 1040K rodata, 804K init, 268K bss, 49884K reserved, 0K cma-reserved)
+smpboot: Total of 4 processors activated (58999.31 BogoMIPS)
+Memory: 468160K/519668K available (6210K kernel code, 841K rwdata, 1040K rodata, 804K init, 268K bss, 49864K reserved, 0K cma-reserved)
 devtmpfs: initialized
 futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
 NET: Registered PF_NETLINK/PF_ROUTE protocol family
@@ -309,34 +308,35 @@ mlkd: kdemo стартовал в домене ядра (kthread pid 90)
 mlkd: amdgpu зарегистрирован (254:1, placement=kernel)
 mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 91), режим уточняется на первом INFO
 IPI shorthand broadcast: enabled
-sched_clock: Marking stable (1236296490, -43204921)->(1647307573, -454216004)
-ata1: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
-ata2: SATA link down (SStatus 0 SControl 300)
+sched_clock: Marking stable (1108137594, -43253188)->(1283080362, -218195956)
+ata6: SATA link down (SStatus 0 SControl 300)
 ata3: SATA link down (SStatus 0 SControl 300)
+ata2: SATA link down (SStatus 0 SControl 300)
+ata1: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
 ata5: SATA link down (SStatus 0 SControl 300)
+ata4: SATA link down (SStatus 0 SControl 300)
 ata1.00: Model 'QEMU HARDDISK', rev '2.5+', applying quirks: bridgeok
 ata1.00: ATA-7: QEMU HARDDISK, 2.5+, max UDMA/100
 ata1.00: 1048576 sectors, multi 16: LBA48 NCQ (depth 32)
-ata6: SATA link down (SStatus 0 SControl 300)
-ata4: SATA link down (SStatus 0 SControl 300)
 ata1.00: configured for UDMA/100
+ata7: SATA link down (SStatus 0 SControl 300)
+ata10: SATA link down (SStatus 0 SControl 300)
+ata12: SATA link down (SStatus 0 SControl 300)
+ata9: SATA link down (SStatus 0 SControl 300)
+ata8: SATA link down (SStatus 0 SControl 300)
+ata11: SATA link down (SStatus 0 SControl 300)
 scsi 0:0:0:0: Direct-Access     ATA      QEMU HARDDISK    2.5+ PQ: 0 ANSI: 5
 sd 0:0:0:0: [sda] 1048576 512-byte logical blocks: (537 MB/512 MiB)
 sd 0:0:0:0: [sda] Write Protect is off
 sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
 sd 0:0:0:0: [sda] Preferred minimum I/O size 512 bytes
-ata7: SATA link down (SStatus 0 SControl 300)
-ata10: SATA link down (SStatus 0 SControl 300)
-ata9: SATA link down (SStatus 0 SControl 300)
-ata11: SATA link down (SStatus 0 SControl 300)
-ata12: SATA link down (SStatus 0 SControl 300)
-ata8: SATA link down (SStatus 0 SControl 300)
 sd 0:0:0:0: [sda] Attached SCSI disk
 input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input2
-tsc: Refined TSC clocksource calibration: 3199.986 MHz
-clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2e203cb6466, max_idle_ns: 440795258295 ns
+clocksource: Watchdog remote CPU 2 read timed out
+tsc: Refined TSC clocksource calibration: 3199.997 MHz
+clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2e204719c91, max_idle_ns: 440795261699 ns
 clocksource: Switched to clocksource tsc
-Freeing initrd memory: 27392K
+Freeing initrd memory: 27372K
 Freeing unused kernel image (initmem) memory: 804K
 Write protecting the kernel read-only data: 10240k
 Freeing unused kernel image (text/rodata gap) memory: 1980K
@@ -348,45 +348,45 @@ supervisor: sysfs смонтирован
 ACPI: \_SB_.GSIG: Enabled at IRQ 22
 supervisor: PCI-устройства из pci.ids отданы uio_pci_generic
 supervisor: манифестов: 13
+mlkd kdemo: mlkd: kdemo: размещение -> user
 supervisor: старт mlbus (/sbin/mlbus): service
 supervisor: старт logsrv (/sbin/logsrv): service
 supervisor: старт uiod (/sbin/uiod): service
-supervisor: старт netd (/sbin/netd): service
 supervisor: старт fused (/sbin/fused): service
+supervisor: старт netd (/sbin/netd): service
 supervisor: старт gpud (/sbin/gpud): service
 supervisor: старт getty (/sbin/getty): service
 supervisor: minstall /dev/sda — установка
 kdriver: /dev/kdemo открыт, echo через домен ядра: OK
 kdriver: счётчик домена 1 -> 2 (state живёт в kthread'е): OK
 kdriver: kdemo: домен ядра, kthread pid=90, requests=3
-mlkd kdemo: mlkd: kdemo: размещение -> user
 kdriver: placement=user: домен отклоняет запросы (-ENODEV): OK
-mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
-minstall: GPT 1048576 секторов: ESP 64M + root
-mlkd kdemo: mlkd: kdemo: размещение -> kernel
-mlkd: kdemo стартовал в домене ядра (kthread pid 103)
-kdriver: placement=kernel: драйвер вернулся в домен: OK
-netd: NIC e1000e
+log-srv: привилегии сброшены (uid 1000)
 uiod: /dev/uio0 открыт, BAR0 замаплен
 uiod: BAR0[0] = 0x140241
-uiod: userspace-драйвер говорит с PCI-устройством через UIO: OK
+mlkd kdemo: mlkd: kdemo: размещение -> kernel
+uiod: userspace-драйвер говорит с PCI-устройством через UIO: OKmlkd: kdemo стартовал в домене ядра (kthread pid 103)
+
 uiod: жду событий устройства (остановка — SIGTERM супервизора)
-fused: /mnt смmlpinned: регион 4096 KiB @ phys 8000000
-онтирован (fuse): README + note.txt, жду запросы ядра
-log-srv: привилегии сброшены (uid 1000)
+mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
+kdriver: placement=kernel: драйвер вернулся в домен: OK
 
 
 milini 7.2.9-milin console
 
-login: gpud: зарегистрирован в шине как "gpu.amdgpu" (user-placement)
-mlbus: register "gpu.amdgpu" (uid 1000, pid 100, world=0x00000000 root=0x00000001)
-log-srv: зарегистрирован в шине как "log"
+login: minstall: GPT 1048576 секторов: ESP 64M + root
 mlbus: register "log" (uid 1000, pid 96, world=0x00000007 root=0x0000000f)
-minstall: PARTUUID 8891eea3-b73e-4da0-9199-560bd86e4728
+mlbus: register "gpu.amdgpu" (uid 1000, pid 100, world=0x00000000 root=0x00000001)
+gpud: зарегистрирован в шине как "gpu.amdgpu" (user-placement)
+fused: /mnt смонтирован (fuse): README + note.txt, жду запросы ядра
+netd: NIC mlpinned: регион 4096 KiB @ phys 8000000
+e1000e
+log-srv: зарегистрирован в шине как "log"
 netd: e1000 через UIO, MAC 52000000:54000000:00000000:12000000:34000000:56000000
 netd: e1000e — legacy-дескрипторы, интрофф (polling)
+mlbus: register "net0" (uid 0, pid 99, world=0x00000000 root=0x00000001)
 netd: сервис "net0" — адрес по DHCP
-mlbus: register "net0" (uid 0, pid 98, world=0x00000000 root=0x00000001)
+minstall: PARTUUID 0d7430a9-a2f4-4a90-8e05-0096adf1d4fd
  sda: sda1 sda2
 minstall: BLKRRPART -> 0
 minstall: /dev/sda1 + /dev/sda2 в devtmpfs (рескан без ребута)
@@ -404,25 +404,35 @@ Creating journal (4096 blocks): done
 Writing superblocks and filesystem accounting information: 0/1   done
 
 minstall: mkfs.ext4 128M OK (мир 71M, resize2fs в конце)
-EXT4-fs (sda2): mounted filesystem bdffe45e-7750-4857-b84b-6675ad57228c r/w with ordered data mode. Quota mode: disabled.
+EXT4-fs (sda2): mounted filesystem 0c93445e-b0ea-4637-8974-f3a02abe8de7 r/w with ordered data mode. Quota mode: disabled.
 minstall: /dev/sda2 смонтирован, копия мира...
-clocksource: Watchdog remote CPU 3 read timed out
 /mst is device /dev/sda2
 minstall: BIOS-загрузчик gptmbr OK
-minstall: ESP OK — BOOTX64.EFI + VMLINUZ.EFI + CMDLINE
-EXT4-fs (sda2): unmounting filesystem bdffe45e-7750-4857-b84b-6675ad57228c.
+minstall: ESP OK — BOOTX64.EFI + MILIN/BOOTX64.EFI + VMLINUZ.EFI + CMDLINE
+EXT4-fs (sda2): unmounting filesystem 0c93445e-b0ea-4637-8974-f3a02abe8de7.
 resize2fs 1.47.2 (1-Jan-2025)
 Resizing the filesystem on /dev/sda2 to 114427 (4k) blocks.
 The filesystem on /dev/sda2 is now 114427 (4k) blocks long.
 
 minstall: RESIZE OK — ext4 на весь p2
 MINSTALL OK /dev/sda
-fused: соединение закрыто, выхожу
 gpud: шина умерла — перерегистрация (state пережил: 0)
+fused: соединение закрыто, выхожу
+netd: шина умерла — перерегистрация
 supervisor: все сервисы остановлены
-supervisor: клиент: FAIL
+supervisor: клиент: OK
 supervisor: gpu e2e: OK
 supervisor: перезапусков сервисов за сессию: 0
-M9 FAILED
-Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000100
-Kernel Offset: 0x19e00000 from 0xffffffff81000000 (relocation range: 0xffffffff80000000-0xffffffffbfffffff)
+M5.2 OK: сервисные манифесты + FUSE_WRITE/READ + readdir
+M5 OK: mbus-реестр + lane-хэндлы + bragi-формат + FUSE-регрессия
+M5.1 OK: helqueue async rings + futex + creds + bench
+M7 OK: capability lanes + supervisor auto-restart
+M7.1 OK: revoke capability on client death
+M7.2 OK: bus-death cascade restart
+M8 OK: blob path for large messages + glibc userspace
+M9 OK: kdriver domain — drivers between kernel and userspace
+M11 OK: mlkd amdgpu facade — one protocol, user/kernel placement
+M22 OK: gpu facade e2e — dev/lane cycles + deny paths (cap/placement)
+kdrv: amdgpu нет в ядре (diet-сборка) — норма
+Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000000
+Kernel Offset: 0x2b400000 from 0xffffffff81000000 (relocation range: 0xffffffff80000000-0xffffffffbfffffff)

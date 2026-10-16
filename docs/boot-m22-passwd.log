@@ -10,8 +10,8 @@ Booting from Hard Disk...
 SYSLINUX 6.03 EDD 2014-10-06 Copyright (C) 1994-2014 H. Peter Anvin et al
 Loading /boot/vmlinuz... ok
 Loading /boot/initramfs.cpio.gz...ok
-c[?7l[2JLinux version 7.2.0+ (z@c-6ad1a28b-145cf406-d68d73f59033) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #5 SMP PREEMPT Fri Oct 16 05:44:29 UTC 2026
-Command line: BOOT_IMAGE=/boot/vmlinuz root=PARTUUID=8891eea3-b73e-4da0-9199-560bd86e4728 rw rootwait rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 console=ttyS0 panic=-1 memmap=4M$0x8000000  initrd=/boot/initramfs.cpio.gz
+c[?7l[2JLinux version 7.2.0+ (z@c-6ad2267f-145cf406-aa42b31e027a) (gcc (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #3 SMP PREEMPT Fri Oct 16 15:41:46 UTC 2026
+Command line: BOOT_IMAGE=/boot/vmlinuz root=PARTUUID=0d7430a9-a2f4-4a90-8e05-0096adf1d4fd rw rootwait rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 console=ttyS0 panic=-1 memmap=4M$0x8000000  initrd=/boot/initramfs.cpio.gz
 BIOS-provided physical RAM map:
 BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff]  System RAM
 BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff]  device reserved
@@ -47,7 +47,7 @@ user: [mem 0x00000000fffc0000-0x00000000ffffffff]  device reserved
 user: [gap 0x0000000100000000-0x000000fcffffffff]
 user: [mem 0x000000fd00000000-0x000000ffffffffff]  device reserved
 tsc: Fast TSC calibration using PIT
-tsc: Detected 3199.984 MHz processor
+tsc: Detected 3199.961 MHz processor
 last_pfn = 0x1ffdf max_arch_pfn = 0x400000000
 x86/PAT: PAT support disabled because CONFIG_X86_PAT is disabled in the kernel.
 x86/PAT: Configuration [0-7]: WB  WT  UC- UC  WB  WT  UC- UC  
@@ -105,7 +105,7 @@ On node 0, zone DMA32: 1024 pages in unavailable ranges
 On node 0, zone DMA32: 33 pages in unavailable ranges
 setup_percpu: NR_CPUS:8 nr_cpumask_bits:4 nr_cpu_ids:4 nr_node_ids:1
 percpu: Embedded 37 pages/cpu s122240 r0 d29312 u524288
-Kernel command line: rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 BOOT_IMAGE=/boot/vmlinuz root=PARTUUID=8891eea3-b73e-4da0-9199-560bd86e4728 rw rootwait rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 console=ttyS0 panic=-1 memmap=4M$0x8000000  initrd=/boot/initramfs.cpio.gz
+Kernel command line: rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 BOOT_IMAGE=/boot/vmlinuz root=PARTUUID=0d7430a9-a2f4-4a90-8e05-0096adf1d4fd rw rootwait rw rootwait memmap=4M$0x8000000 console=tty0 console=ttyS0 console=ttyS0 panic=-1 memmap=4M$0x8000000  initrd=/boot/initramfs.cpio.gz
 printk: log buffer data + meta data: 131072 + 458752 = 589824 bytes
 Dentry cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
 Inode-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
@@ -129,8 +129,8 @@ ACPI: Core revision 20260408
 clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
 APIC: Switch to symmetric I/O mode setup
 ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
-clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e203b27599, max_idle_ns: 440795314464 ns
-Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.96 BogoMIPS (lpj=12799936)
+clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2e202556717, max_idle_ns: 440795345100 ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 6399.92 BogoMIPS (lpj=12799844)
 Last level iTLB entries: 4KB 512, 2MB 255, 4MB 127
 Last level dTLB entries: 4KB 512, 2MB 255, 4MB 127, 1GB 0
 mitigations: Enabled attack vectors: SMT mitigations: off
@@ -149,10 +149,10 @@ rcu: 	Max phase no-delay instances is 1000.
 smp: Bringing up secondary CPUs ...
 smpboot: x86: Booting SMP configuration:
 .... node  #0, CPUs:      #1 #2 #3
-calibrate_delay_direct() dropping max bogoMips estimate 4 = 76859987
-calibrate_delay_direct() dropping max bogoMips estimate 0 = 45959453
+calibrate_delay_direct() dropping min bogoMips estimate 4 = 11310509
+calibrate_delay_direct() dropping max bogoMips estimate 4 = 57841605
 smp: Brought up 1 node, 4 CPUs
-smpboot: Total of 4 processors activated (25297.13 BogoMIPS)
+smpboot: Total of 4 processors activated (25972.91 BogoMIPS)
 Memory: 495516K/519668K available (6210K kernel code, 841K rwdata, 1040K rodata, 804K init, 268K bss, 22508K reserved, 0K cma-reserved)
 devtmpfs: initialized
 futex hash table entries: 1024 (65536 bytes on 1 NUMA nodes, total 64 KiB, linear).
@@ -299,32 +299,32 @@ usbhid: USB HID core driver
 i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
 serio: i8042 KBD port at 0x60,0x64 irq 1
 serio: i8042 AUX port at 0x60,0x64 irq 12
-input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
 ACPI: \_SB_.GSIH: Enabled at IRQ 23
 Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input0
 00:03: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
 random: crng init done
 mlkd: kdemo зарегистрирован (254:0, placement=kernel)
-mlkd: kdemo стартовал в домене ядра (kthread pid 86)
+mlkd: kdemo стартовал в домене ядра (kthread pid 85)
 mlkd: amdgpu зарегистрирован (254:1, placement=kernel)
-mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 87), режим уточняется на первом INFO
+mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 86), режим уточняется на первом INFO
 IPI shorthand broadcast: enabled
-sched_clock: Marking stable (1108696160, 27044587)->(1235225784, -99485037)
-ata4: SATA link down (SStatus 0 SControl 300)
-ata2: SATA link down (SStatus 0 SControl 300)
+sched_clock: Marking stable (1119905496, 28635630)->(1219342188, -70801062)
 ata1: SATA link up 1.5 Gbps (SStatus 113 SControl 300)
 ata1.00: Model 'QEMU HARDDISK', rev '2.5+', applying quirks: bridgeok
 ata1.00: ATA-7: QEMU HARDDISK, 2.5+, max UDMA/100
 ata1.00: 1048576 sectors, multi 16: LBA48 NCQ (depth 32)
-ata10: SATA link down (SStatus 0 SControl 300)
-ata7: SATA link down (SStatus 0 SControl 300)
-ata9: SATA link down (SStatus 0 SControl 300)
+ata4: SATA link down (SStatus 0 SControl 300)
 ata8: SATA link down (SStatus 0 SControl 300)
-ata11: SATA link down (SStatus 0 SControl 300)
+ata7: SATA link down (SStatus 0 SControl 300)
+ata2: SATA link down (SStatus 0 SControl 300)
+ata5: SATA link down (SStatus 0 SControl 300)
 ata3: SATA link down (SStatus 0 SControl 300)
 ata6: SATA link down (SStatus 0 SControl 300)
-ata5: SATA link down (SStatus 0 SControl 300)
 ata1.00: configured for UDMA/100
+ata10: SATA link down (SStatus 0 SControl 300)
+ata11: SATA link down (SStatus 0 SControl 300)
+ata9: SATA link down (SStatus 0 SControl 300)
 ata12: SATA link down (SStatus 0 SControl 300)
 scsi 0:0:0:0: Direct-Access     ATA      QEMU HARDDISK    2.5+ PQ: 0 ANSI: 5
 sd 0:0:0:0: [sda] 1048576 512-byte logical blocks: (537 MB/512 MiB)
@@ -334,7 +334,6 @@ sd 0:0:0:0: [sda] Preferred minimum I/O size 512 bytes
  sda: sda1 sda2
 sd 0:0:0:0: [sda] Attached SCSI disk
 input: ImExPS/2 Generic Explorer Mouse as /devices/platform/i8042/serio1/input/input2
-clocksource: Watchdog remote CPU 2 read timed out
 Freeing unused kernel image (initmem) memory: 804K
 Write protecting the kernel read-only data: 10240k
 Freeing unused kernel image (text/rodata gap) memory: 1980K
@@ -344,10 +343,10 @@ MiLin supervisor: сервисные манифесты из /etc/milin (M7: rea
 supervisor: devtmpfs смонтирован на /dev
 supervisor: sysfs смонтирован
 supervisor: pci-testdev отдан драйверу uio_pci_generic
-supervisor: PARTUUID 8891eea3-b73e-4da0-9199-560bd86e4728 -> /dev/sda2
-EXT4-fs (sda2): 2 orphan inodes deleted
+supervisor: PARTUUID 0d7430a9-a2f4-4a90-8e05-0096adf1d4fd -> /dev/sda2
+EXT4-fs (sda2): 3 orphan inodes deleted
 EXT4-fs (sda2): recovery complete
-EXT4-fs (sda2): mounted filesystem bdffe45e-7750-4857-b84b-6675ad57228c r/w with ordered data mode. Quota mode: disabled.
+EXT4-fs (sda2): mounted filesystem 0c93445e-b0ea-4637-8974-f3a02abe8de7 r/w with ordered data mode. Quota mode: disabled.
 supervisor: root=/dev/sda2 смонтирован (ext4)
 supervisor: switch_root OK — exec /sbin/init
 MiLin supervisor: сервисные манифесты из /etc/milin (M7: reaper)
@@ -358,134 +357,142 @@ supervisor: манифестов: 13
 supervisor: старт mlbus (/sbin/mlbus): service
 supervisor: старт logsrv (/sbin/logsrv): service
 supervisor: старт uiod (/sbin/uiod): service
-supervisor: старт fused (/sbin/fused): service
 supervisor: старт netd (/sbin/netd): service
-supervisor: старт gpuduiod: /dev/uio0 открыт, BAR0 замаплен
+log-srv: привилегии сброшены (uid 1000)
+mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
+supervisor: старт fused (/sbin/fused): service
+supervisor: старт gpud (/sbin/gpud): service
+supervisor: старт client (/sbin/client): oneshot
+supervisor: старт gputest (/sbin/gputest): oneshot
+supervisor: старт netclient (/sbin/netclient): oneshot
+supervisor: старт persistcheck (/sbin/persistcheck): oneshot
+supervisor: старт uiod: /dev/uio0 открыт, BAR0 замаплен
 uiod: BAR0[0] = 0x140241
 uiod: userspace-драйвер говорит с PCI-устройством через UIO: OK
 uiod: жду событий устройства (остановка — SIGTERM супервизора)
-log-srv: привилегии сброшены (uid 1000)
-fused: /mnt смонтирован (fuse): README + note.txt, жду запросы ядра
- (/sbin/gpud): service
-mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
-supervisor: старт client (/sbin/client): oneshot
-supervisor: старт gputest (/sbin/gputest): oneshot
-supervisor: старт persistcheck (/sbin/persistcheck): oneshot
-supervisor: старт netclient (/sbin/netclient): oneshot
-gpud: зарегистрирован в шине как "gpu.amdgpu" (user-placement)
-mlbus: register "gpu.amdgpu" (uid 1000, pid 103, world=0x00000000 root=0xsupervisor: старт 00000001)
 xbpstest (/sbin/xbpstest): oneshot
-mlbus: register "log" (uid 1000, pid 99, world=0x00000007 root=0x0000000f)
-log-srv: зарегистрирован в шине как "log"
-M22 GPU DEV OK
-netd: NIC e1000e
-mlpinned: регион 4096 KiB @ phys 8000000
 supervisor: старт mnttest (/sbin/mnttest): oneshot
+netd: NIC e1000e
+mlbus: register "log" (uid 1000, pid 95, world=0x00000007 root=0x0000000f)
 supervisor: старт getty (/sbin/getty): service
-mlkd amdgpu: mlkd: amdgpu: размещение -> user
-M22 GPU DENYDEV OK
-mlbus: lookup /dev/sda: Can't open blockdev
-net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
-persistcheck: маркер с прошлого бута: dash
-persistcheck: установка легла на постоянный ext4 (PERSIST OK)
+mlbus: register "gpu.amdgpu" (uid 1000, pid 99, world=0x00000000 root=0x00000001)
+gpud: зарегистрирован в шине как "gpu.amdgpu" (user-placement)
+log-srv: зарегистрирован в шине как "log"
+/dev/sda: Can't open blockdev
+mlpinned: регион 4096 KiB @ phys 8000000
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
 kdriver: /dev/kdemo открыт, echo через домен ядра: OK
+fused: /mnt смонтирован (fuse): README + note.txt, жду запросы ядра
 kdriver: счётчик домена 1 -> 2 (state живёт в kthread'е): OK
-mlbus: lookup gpu.amdgpumnttest: mount : DENIED: uid /dev/sda FAIL
-1000 не входит в политику сервера
+mnttest: mount /dev/sda FAIL
 mnttest: блочных устройств нет — SKIP
-kdriver: kdemo: домен ядра, kthread pid=86, requests=3
-client: uid=1000 (был 0 → MULTIUSER работает)
-M22 GPU CAPDENY OK
-netd: e1000 через UIO, MAC 52000000:54000000:00000000:12000000:34000000:56000000
-netd: e1000e — legacy-дескрипторы, интрофф (polling)
-mlkd kdemo: mlkd: kdemo: размещение -> user
-mlbus: lookup gpu.amdgpu: uid 0, права 0xkdriver: placement=user: домен отклоняет запросы (-ENODEV): OK
-00000001
-log-srv: lane: клиент uid 1000, права 0x00000007
-mlbus: lookup log: uid 1000, права 0x00000007
-mlbus: register "net0" (uid 0, pid 102, world=0x00000000 root=0x00000001)
-client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
-log-srv: uid=1000: привет из MiLin: IPC в стиле bragi/mbus
-log-srv: uid=1000: серверы общаются сообщениями, а не ...(+25 байт)
-log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
-netd: сервис "net0" — адрес по DHCP
-client: M5-регрессия (seqpacket WRITE x2 + ack): OK
-netd: lane клиента принят
-netclient: lane "net0" получен
-tsc: Refined TSC clocksource calibration: 3199.986 MHz
-clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2e203cb6466, max_idle_ns: 440795258295 ns
-mlkd kdemo: mlkd: kdemo: размещение -> kernel
-mlkd: kdemo стартовал в домене ядра (kthread pid 112)
+M22 GPU DEV OK
 
 
 milini 7.2.9-milin console
+mlkd amdgpu: mlkd: amdgpu: размещение -> user
 
-login: kdriver: placement=kernel: драйвер вернулся в домен: OK
-netd: DHCP OFFER ip=10.0.2.15mlbus: lookup 
-net0: uid 0, права 0x00000001
+login: kdriver: kdemo: домен ядра, kthread pid=85, requests=3
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+M22 GPU DENYDEV OK
+tsc: Refined TSC clocksource calibration: 3199.997 MHz
+clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2e204719c91, max_idle_ns: 440795261699 ns
+mlkd kdemo: mlkd: kdemo: размещение -> user
+kdriver: placement=user: домен отклоняет запросы (-ENODEV): OK
+netd: e1000 через UIO, MAC 52000000:54000000:00000000:12000000:34000000:56000000
+netd: e1000e — legacy-дескрипторы, интрофф (polling)
+persistcheck: маркер с прошлого бута: dash
+persistcheck: установка легла на постоянный ext4 (PERSIST OK)
 clocksource: Switched to clocksource tsc
-netd: CONNECT sid=0 ip=0a000202:8000
+mlbus: lookup gpu.amdgpu: DENIED: uid 1000 не входит в политику сервера
+mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
+mlbus: register "net0" (uid 0, pid 97, world=0x00000000 root=0x00000001)
+client: uid=1000 (был 0 → MULTIUSER работает)
+netd: сервис "net0" — адрес по DHCP
+M22 GPU CAPDENY OK
+mlkd kdemo: mlkd: kdemo: размещение -> kernel
+mlkd: kdemo стартовал в домене ядра (kthread pid 110)
+kdriver: placement=kernel: драйвер вернулся в домен: OK
+mlbus: lookup gpu.amdgpu: uid 0, права 0x00000001
+netd: lane клиента принят
+netclient: lane "net0" получен
 M22 GPU LANE OK
+mlbus: lookup netd: DHCP OFFER ip=gpud: lane: клиент ушёл (EOF), capability отозвана
+10.0.2.15
+netd: CONNECT sid=0 ip=0a000202:8000
+net0: uid 0, права 0x00000001
+log-srv: lane: клиент uid 1000, права 0x00000007
+mlbus: lookup client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
+log: uid log-srv: 1000, права 0x00000007
+uid=1000: привет из MiLin: IPC в стиле bragi/mbus
+log-srv: uid=1000: серверы общаются сообщениями, а не ...(+25 байт)
+client: M5-регрессия (seqpacket WRITE x2 + ack): OK
+log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
+netd: DHCP OK ip=10.0.2.15 mask=255.255.255.0 gw=10.0.2.2 dns=10.0.2.3
+mlbus: lookup gpu.amdgpu: uid 0, права 0x00000001 + bulkgputest: bulk: submit 65536 байт через слот арены, sum сошлась, слот возвращён до ack
+gpud: lane: клиент ушёл (EOF), capability отозвана
+M22 GPU BULK OK
+log-srv: lane: клиент uid 1000mlbus: lookup client: helq: lookup "log" -> lane + shm-регион очередей
 mlkd amdgpu: mlkd: amdgpu: размещение -> kernel
-mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 113), режим уточняется на первом INFO
-gpud: запрос отклонён: фасад в домене ядра (placement=kernel)
+mlkd: amdgpu-fac: запросная плоскость GPU в домене (pid 112), режим уточняется на первом INFO
+log: uid , права 0x00000007
+log-srv: uid=1000: асинхронные очереди в разделяемой ...(+23 байт)
+1000, права 0x00000007 + helqlog-srv: uid=1000: будильник — futex, ядро в data path не уча�...(+11 байт)
+client: helq: WRITE x2 напечатаны с uid, STATS served=gpud: запрос отклонён: фасад в домене ядра (placement=kernel)
+4
+
 M22 GPU RETURN OK
 M22 GPU E2E OK
-gpud: lane: клиент ушёл (EOF), capability отозвана
-log-srv: lane: клиент uid 1000, права 0x00000007
-client: helq: lookup "log" -> lane + shm-регион очередей
-mlbus: lookup log: uid 1000, права 0x00000007 + helqmlbus: клиент (pid 105) умер — revoke capability -> серверу
-log-srv: uid=1000: асинхронные очереди в разделяемой ...(+23 байт)
-netd: DHCP OK ip=10.0.2.15 mask=255.255.255.0 gw=10.0.2.2 dns=10.0.2.3
-log-srv: uid=1000: будильник — futex, ядро в data path не уча�...(+11 байт)
-client: helq: WRITE x2 напечатаны с uid, STATS served=4
+mlbus: lookup gpu.amdgpu: uid 0, права 0x00000001gpud: lane: клиент ушёл (EOF), capability отозвана
 
+mlbus: клиент (pid 101) умер — revoke capability -> серверу
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+20416 байт)
 client: helq: WRITE 20480 байт уехал через blob-слот (в очереди — только ссылка)
-ipc-bench: helq-blob 32K rtt avg=1547811 cycles/msg (blob-слот, n=64)
-ipc-bench: helq-blob 32K pipe avg=1151023 cycles/msg (конвейер, 4 в полёте, n=32)
+ipc-bench: helq-blob 32K rtt avg=2249279 cycles/msg (blob-слот, n=64)
+ipc-bench: helq-blob 32K pipe avg=1669717 cycles/msg (конвейер, 4 в полёте, n=32)
 log-srv: uid=1000: abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl...(+102336 байт)
 client: helq: WRITE 102400 байт уехал цепочкой из 4 blob-слотов (в очереди — одна ссылка)
-ipc-bench: helq-bulk 64K rtt avg=2720237 cycles/msg (цепочка blob-слотов, n=32)
-ipc-bench: helq-futex rtt avg=942466 cycles (парковка futex'ом, n=256)
-ipc-bench: helq-yield rtt avg=15677 cycles (поллинг+yield, n=256)
-ipc-bench: helq enqueue avg=16111 cycles/msg (пачка в один чанк, k=64)
+ipc-bench: helq-bulk 64K rtt avg=5912146 cycles/msg (цепочка blob-слотов, n=32)
+ipc-bench: helq-futex rtt avg=141972 cycles (парковка futex'ом, n=256)
+ipc-bench: helq-yield rtt avg=192542 cycles (поллинг+yield, n=256)
+ipc-bench: helq enqueue avg=8019 cycles/msg (пачка в один чанк, k=64)
 log-srv: helq-lane закрыт
 client: helq: демо + бенчмарк завершены, lane закрыт
 mlbus: lookup log: uid 1000, права 0x00000007
 log-srv: lane: клиент uid 1000, права 0x00000007
 client: seqpacket: lookup "log" -> lane (fd пришёл SCM_RIGHTS)
 [*] Updating repository `https://repo-default.voidlinux.org/current/x86_64-repodata' ...
-netd: lane клиента принят
-mlbus: lookup net0: uid 0, права 0x00000001
-netsh: сервис net0 найден
-netsh: socket(2,1,0) lane=4
-ipc-bench: seqpacket rtt avg=1132743 cycles (ядро в data path: sendmsg+recvmsg, n=256)
-log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
+ipc-bench: seqpacket rtt avg=749441 cycles (ядро в data path: sendmsg+recvmsg, n=256)
 mlbus: lookup log: uid 1000, права 0x00000007
-netsh: slot=0 efd=5
-netsh: reader msg id=2 sid=1 err=0 tlen=0
+log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
 log-srv: lane: клиент uid 1000, права 0x00000007
 client: STATS served=966
 : все сообщения доставлены
 client: capability: права на lane: 0x00000007 (выдала шина по uid-политике сервера)
-log-srv: отказ msg netsh: NET_OPEN rc=0 efd=5
+log-srv: отказ msg 8: нет права 0xmlbus: lookup net0: uid 0, права 0x00000001
+netd: lane клиента принят
+00000008 (lane 0x00000007)
+client: capability: RESET отклонён (ML_E_PERM, нет ML_CAP_ADMIN): OK
+log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
+mlbus: whereis "log" -> pid 95
+client: whereis: "log" -> pid 95
+client: fault: SIGKILL отправлен log-серверу (pid 95)
+supervisor: logsrv (pid 95) умер (сигнал 9) — перезапуск #1
+mlbus: сервер "log" отвалился, имя освобождено
+netsh: сервис net0 найден
+netsh: socket(2,1,0) lane=4
+netsh: slot=0 efd=5
+netsh: reader msg id=2 sid=1 err=0 tlen=0
+netsh: NET_OPEN rc=0 efd=5
 netsh: connect(fd=5 fam=2) k=1
 netd: CONNECT sid=1 ip=0a000203:53
-8: нет права 0x00000008 (lane 0x00000007)
-client: capability: RESET отклонён (ML_E_PERM, нет ML_CAP_ADMIN): OK
-mlbus: whereis "log" -> pid 99
-client: whereis: "log" -> pid 99
-client: fault: SIGKILL отправлен log-серверу (pid 99)
-mlbus: сервер "log" отвалился, имя освобождено
-supervisor: logsrv (pid 99) умер (сигнал 9) — перезапуск #1
-supervisor: logsrv перезапущен (pid 116)
 log-srv: привилегии сброшены (uid 1000)
-mlbus: register "log" (uid 1000, pid 116, world=0x00000007 root=0x0000000f)
+mlbus: register "log" (uid 1000, pid 114, world=0x00000007 root=0x0000000f)
 log-srv: зарегистрирован в шине как "log"
-mlbus: lookup log: uid 1000, права 0x00000007
+supervisor: logsrv перезапущен (pid 114)
+mlbus: lookup loglog-srv: lane: клиент uid 1000, права 0x00000007
+: uid 1000, права 0x00000007
 client: fault: шина выдала lane на ПЕРЕЗАПУЩЕННЫЙ сервер
-log-srv: lane: клиент uid 1000, права 0x00000007
 log-srv: uid=1000: IPC пережил падение сервера: суперви...(+38 байт)
 client: fault: WRITE на новый lane подтверждён — автоперезапуск работает
 log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
@@ -505,58 +512,56 @@ netsh: NET_OPEN rc=0 efd=5
 netsh: connect(fd=5 fam=2) k=1
 netd: CONNECT sid=2 ip=87b5a03a:443
 netclient: CONNECT FAIL
-client: revoke: жертва (pid 117) держит helq-lane — SIGKILL
-mlbus: клиент (pid 117) умер — revoke capability -> серверу
-log-srv: helq: клиент uid 1000 (pid 117) умер — capability REVOKED, lane закрыт
+client: revoke: жертва (pid 115) держит helq-lane — SIGKILL
+mlbus: клиент (pid 115) умер — revoke capability -> серверу
+mlbus: lookup log: uid 1000, права 0x00000007 + helqlog-srv: helq: клиент uid 1000 (pid 115) умер — capability REVOKED, lane закрыт
 log-srv: helq-lane закрыт
-log-srv: шина: revoke клиента pid 117
+log-srv: шина: revoke клиента pid 115
 log-srv: lane: клиент uid 1000, права 0x00000007
 log-srv: uid=1000: capability мертвеца отозваны — сервер ж...(+4 байт)
-mlbus: lookup log: uid 1000, права 0x00000007 + helqclient: revoke: права мертвеца отозваны, сервер обслужил новый lane: OK
-client: cascade: убиваю ШИНУ (pid 97) — система должна самоисцелиться
+client: revoke: права мертвеца отозваны, сервер обслужил новый lane: OK
+client: cascade: убиваю ШИНУ (pid 94) — система должна самоисцелиться
 log-srv: helq-lane закрыт
 netd: шина умерла — перерегистрация
-log-srv: шина умерла — перерегистрация (счётчик пережил: 3gpud: шина умерла — перерегистрация (state пережил: 1)
-)
-supervisor: mlbus (pid 97) умер (сигнал 9) — перезапуск #1
-supervisor: mlbus перезапущен (pid 118)
+gpud: шина умерла — перерегистрация (state пережил: 2)
+log-srv: шина умерла — перерегистрация (счётчик пережил: 3)
+supervisor: mlbus (pid 94) умер (сигнал 9) — перезапуск #1
+supervisor: mlbus перезапущен (pid 116)
 mlbus: реестр lane'ов слушает @milin-bus (SO_PASSCRED, poll)
+mlbus: register "gpu.amdgpu" (uid 1000, pid 99, world=0x00000000 root=0x00000001)
+gpud: перерегистрирован в новой шине
+mlbus: register "net0" (uid 0, pid 97, world=0x00000000 root=0x00000001)
+mlbus: register "log" (uid 1000, pid 114, world=0x00000007 root=0x0000000f)
+log-srv: перерегистрирован в новой шине
 client: cascade: шина перезапущена супервизором, клиент переподключился
-mlbus: register "gpu.amdgpu" (uid gpud: перерегистрирован в новой шине
-1000, pid 103, world=0x00000000 root=0x00000001)
-mlbus: lookup log: нет такой сущности (как NO_SUCH_ENTITY в mbus)
-mlbus: lookup net0: нет такой сущности (как NO_SUCH_ENTITY в mbus)
-mlbus: register "net0" (uid 0, pid 102, world=0x00000000 root=0x00000001)
-mlbus: register "log" (uid 1000log-srv: перерегистрирован в новой шине
-, pid 116, world=0x00000007 root=0x0000000f)
-mlbus: lookup net0: uid 0, права 0x00000001
-netclient: lane "net0" получен
-netd: lane клиента принят
-netd: CONNECT sid=0 ip=0a000202:8000
-mlbus: lookup log: uid 1000, права 0x00000007
+log-srv: lane: клиент uid mlbus: lookup log: uid 1000, права 0x00000007
+1000, права 0x00000007
 client: cascade: log-сервер перерегистрировался в новой шине
-log-srv: lane: клиент uid 1000, права 0x00000007
 log-srv: uid=1000: шина умерла — IPC пережил каскадный ...(+20 байт)
 client: cascade: STATS served=4 — state пережил смерть сервера и шины: OK
-client: glibc: запускаю /sbin/gclient (динамический)
 log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
-mlbus: клиент (pid 104) умер — revoke capability -> серверу
-log-srv: шина: revoke клиента pid 104
+client: glibc: запускаю /sbin/gclient (динамический)
+mlbus: клиент (pid 100) умер — revoke capability -> серверу
+log-srv: шина: revoke клиента pid 100
+mlbus: lookup net0netd: lane клиента принят
+netclient: lane "net0" получен
+: uid 0, права 0x00000001
+netd: CONNECT sid=0 ip=0a000202:8000
 mlbus: lookup log: uid 1000, права 0x00000007
 log-srv: lane: клиент uid 1000, права 0x00000007
 log-srv: uid=1000: привет от glibc 2.41: stdio+malloc+seqpacket через ...(+14 байт)
 gclient: WRITE подтверждён (stored_len=78)
 gclient: STATS served=5
 log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
-log-srv: lane: клиент uid 1000, права 0x00000007mlbus: lookup log: uid 1000, права 0x00000007 + helq
-gclient: bench: helq-futex rtt avg=259617 cycles (n=128)
+log-srv: lane: клиент uid 1000, права 0x00000007
+mlbus: lookup log: uid 1000, права 0x00000007 + helqgclient: bench: helq-futex rtt avg=113844 cycles (n=128)
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+102336 байт)
 gclient: helq: bulk 100КБ цепочкой blob-слотов: stored_len=102400
 log-srv: helq-lane закрыт
 gclient: fork+waitpid: ребёнок прочитал README и дописал note.txt через stdio
 gclient: OK
-mlbus: клиент (pid 119) умер — revoke capability -> серверу
-log-srv: шина: revoke клиента pid 119
+mlbus: клиент (pid 117) умер — revoke capability -> серверу
+log-srv: шина: revoke клиента pid 117
 client: glibc: gclient OK — динамический userspace работает
 client: /mnt/README: MiLin FUSE OK
 client: FUSE-регрессия + чтение содержимого: OK
@@ -569,39 +574,28 @@ client: readdir: README + note.txt найдены: OK
 client: stat /mnt/note.txt: size=69 (WRITE виден в атрибутах)
 log-srv: lane: клиент uid 1000, права 0x00000007
 mlbus: lookup log: uid 1000, права 0x00000007 + bulklog-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
-netd: EST sid=2
-netsh: reader msg id=4 sid=2 err=0 tlen=0
-log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
-log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
-netsh: connect rc=0
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
 log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
-client: bulk: 8 x 128KB через арену, ack/len сошлись (avg 19822117 cycles/write)
+log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
+log-srv: uid=1000: ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL...(+131008 байт)
+client: bulk: 8 x 128KB через арену, ack/len сошлись (avg 5201458 cycles/write)
 M22 BULK OK
+client: IPC-демо + capability + отказ-инъекция + FUSE: OK
 log-srv: seqpacket: клиент отключился — capability отозвана (EOF)
 log-srv: bulk-lane закрыт
-mlbus: клиент (pid 104) умер — revoke capability -> серверу
-client: IPC-демо + capability + отказ-инъекция + FUSE: OK
-log-srv: шина: revoke клиента pid 104
+mlbus: клиент (pid 100) умер — revoke capability -> серверу
+log-srv: шина: revoke клиента pid 100
+netd: EST sid=2
+netsh: reader msg id=4 sid=2 err=0 tlen=0
+netsh: connect rc=0
+clocksource: Watchdog remote CPU 1 read timed out
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=118
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=118
 netsh: reader msg id=9 sid=2 err=0 tlen=256
 netsh: reader msg id=9 sid=2 err=0 tlen=256
 netsh: reader msg id=9 sid=2 err=0 tlen=256
@@ -609,9 +603,21 @@ netsh: reader msg id=9 sid=2 err=0 tlen=256
 netsh: reader msg id=9 sid=2 err=0 tlen=256
 netsh: reader msg id=9 sid=2 err=0 tlen=160
 netsh: reader msg id=9 sid=2 err=0 tlen=256
-netsh: reader msg id=9 sid=2 err=0 tlen=79
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=160
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=256
+netsh: reader msg id=9 sid=2 err=0 tlen=160
+netsh: reader msg id=9 sid=2 err=0 tlen=251
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
+netd: жив (тик 64)
 netsh: reader msg id=9 sid=2 err=0 tlen=51
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
@@ -623,35 +629,34 @@ netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
-netd: жив (тик 64)
 netd: SEND_R sid=2 err=0
 netsh: reader msg id=6 sid=2 err=0 tlen=0
 netsh: reader msg id=9 sid=2 err=0 tlen=230
 netd: жив (тик 128)
 netclient: CONNECT FAIL
-ERROR: Package `dash' already installed.
 mlbus: lookup net0: uid 0, права 0x00000001
-netclient: lane "net0" получен
 netd: lane клиента принят
+netclient: lane "net0" получен
 netd: CONNECT sid=0 ip=0a000202:8000
+ERROR: Package `dash' already installed.
 netd: lane закрыт клиентом
 xbpstest: waitpid st=0 sig=0 exit=0
 xbpstest: xbps-install rc=0
-mlbus: lookup net0: uid 0netd: lane клиента принят
-, права 0x00000001
+mlbus: lookup net0: uid 0, права 0x00000001
+netd: lane клиента принят
 netsh: сервис net0 найден
-installed-dash-runs pid=121 version=/usr/bin/dash
+installed-dash-runs pid=119 version=/usr/bin/dash
 netd: lane закрыт клиентом
-mlbus: клиент (pid 121) умер — revoke capability -> серверу
 xbpstest: waitpid st=0 sig=0 exit=0
 xbpstest: dash rc=0
 M14 OK: real void repo (https) install + run over userspace network
+mlbus: клиент (pid 119) умер — revoke capability -> серверу
 xbpstest: persist marker записан
 netd: жив (тик 192)
 netclient: CONNECT FAIL
-mlbus: lookup net0: uid 0netclient: lane "net0" получен
+mlbus: lookup net0: uid 0, права 0x00000001
+netclient: lane "net0" получен
 netd: lane клиента принят
-, права 0x00000001
 netd: CONNECT sid=0 ip=0a000202:8000
 netd: жив (тик 256)
 netd: жив (тик 320)
@@ -659,10 +664,10 @@ netclient: CONNECT FAIL
 netd: lane закрыт клиентом
 netd: lane закрыт клиентом
 netd: lane закрыт клиентом
-netd: lane закрыт клиентом
-mlbus: клиент (pid 107) умер — revoke capability -> серверу
-mlbus: клиент (pid 107) умер — revoke capability -> серверу
-mlbus: клиент (pid 107) умер — revoke capability -> серверу
+mlbus: клиент (pid 102) умер — revoke capability -> серверу
+mlbus: клиент (pid 102) умер — revoke capability -> серверу
+mlbus: клиент (pid 102netd: lane закрыт клиентом
+) умер — revoke capability -> серверу
 netd: жив (тик 384)
 root
 Password: netd: жив (тик 448)
@@ -716,16 +721,16 @@ echo M20 PASSWD LOGIN2 OK
 M20 PASSWD LOGIN2 OK
 $ netd: жив (тик 1472)
 /sbin/last
-7 root console 1792136832
-8 - console 1792136838
-7 user console 1792136845
-8 - console 1792136851
-7 root console 1792136859
-7 root console 1792136888
-8 - console 1792136901
-7 user console 1792136908
-8 - console 1792136928
-7 user console 1792136935
+7 root console 1792175650
+8 - console 1792175656
+7 user console 1792175663
+8 - console 1792175669
+7 root console 1792175677
+7 root console 1792175723
+8 - console 1792175736
+7 user console 1792175743
+8 - console 1792175763
+7 user console 1792175770
 M21 WTMP OK n=6
 $ netd: жив (тик 1536)
 netd: жив (тик 1600)

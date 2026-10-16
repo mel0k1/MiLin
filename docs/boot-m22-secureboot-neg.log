@@ -1,0 +1,5 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00013 " from PciRoot(0x0)/Pci(0x4,0x0)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: failed to load Boot0001 "UEFI QEMU HARDDISK QM00013 " from PciRoot(0x0)/Pci(0x4,0x0)/Sata(0x0,0xFFFF,0x0): Access Denied
+BdsDxe: No bootable option or device was found.
+BdsDxe: Press any key to enter the Boot Manager Menu.
+qemu-system-x86_64: terminating on signal 15 from pid 1365 (timeout)
