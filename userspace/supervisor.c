@@ -46,6 +46,7 @@ struct svc {
     int stopping;   // остановка запланирована супервизором (graceful)
     int stopped;
     int done;       // oneshot завершился
+    int status;     // статус выхода oneshot (wait4) — вердикты M11/M22
 };
 
 #define MAX_RESTARTS 3
@@ -322,223 +323,6 @@ static int kd_demo(void) {
     return 0;
 }
 
-// --- M11: mlkd-фасад amdgpu: один протокол mlgpu, два размещения ---
-// placement=kernel: запросный цикл в kthread домена (/dev/amdgpu);
-// placement=user: домен отклоняет (-ENODEV), протокол обслуживает gpud
-// через lane "gpu.amdgpu" — та же семантика, что проверяет демо.
-#define FAC_DEMO_DW 4
-static char gpu_rbuf[ML_MAXTAIL];
-static long gpu_bus = -1;
-
-// запрос через /dev: [op][payload] -> ответ (длина или -код ядра:
-// -ENODEV при placement=user доходит вызывающему как есть)
-static long gpu_dev_req(long fd, u8 op, const void *payload, u32 plen) {
-    static u8 req[1 + sizeof(struct mlgpu_submit_in) + FAC_DEMO_DW * 4];
-    req[0] = op;
-    if (plen) m_memcpy(req + 1, payload, plen);
-    long w = sys3(SYS_write, fd, (long)req, 1 + plen);
-    if (w != (long)(1 + plen)) return w;
-    return sys3(SYS_read, fd, (long)gpu_rbuf, sizeof(gpu_rbuf));
-}
-
-// запрос через шину: GPU_REQ(tail=[op][payload]) -> GPU_REQ_R
-static long gpu_lane_req(long lane, u8 op, const void *payload, u32 plen) {
-    static u8 tbuf[ML_MAXTAIL];
-    struct ml_msg q = { ML_PROTO_GPU, GPU_REQ, 0, 0, {0} };
-    tbuf[0] = (u8)op;
-    if (plen) m_memcpy(tbuf + 1, payload, plen);
-    if (ml_send(lane, &q, tbuf, 1 + plen, 0, 0) < 0) return -1;
-    struct ml_msg resp;
-    struct ml_aux aux;
-    long r = ml_recv(lane, &resp, gpu_rbuf, sizeof(gpu_rbuf), &aux);
-    if (r <= 0 || resp.proto != ML_PROTO_GPU || resp.msg_id != GPU_REQ_R)
-        return -1;
-    return resp.err == ML_E_OK ? (long)resp.tail_len : -ML_E_PERM - 100;
-}
-
-static long gpu_lookup_lane(void) {
-    struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
-    m_memcpy(q.head, "gpu.amdgpu", 11);
-    *ml_h(&q, 2) = ML_TR_SEQPACKET;
-    for (int tries = 0; tries < 100; tries++) {
-        if (ml_send(gpu_bus, &q, 0, 0, 0, 0) < 0) return -1;
-        struct ml_msg resp;
-        struct ml_aux aux;
-        if (ml_recv(gpu_bus, &resp, 0, 0, &aux) <= 0) return -1;
-        if (resp.err == ML_E_OK && aux.nhooks >= 1) return aux.hooks[0];
-        if (resp.err == ML_E_PERM) return -2;
-        sleep_ms(20);
-    }
-    return -1;
-}
-
-static long gpu_placement(const char *pl, long plen) {
-    long pf = sys3(SYS_open, (long)"/sys/class/mlkd/amdgpu/placement",
-                   O_WRONLY, 0);
-    if (pf < 0 || sys3(SYS_write, pf, (long)pl, plen) != plen) {
-        if (pf >= 0) sys3(SYS_close, pf, 0, 0);
-        return -1;
-    }
-    sys3(SYS_close, pf, 0, 0);
-    return 0;
-}
-
-// полный цикл SUBMIT->WAIT->FREE; lane=0 -> через /dev (fd), иначе через шину
-static int gpu_cycle(long fd, long lane, u64 h) {
-    const char *who = lane ? "lane" : "dev";
-    struct { struct mlgpu_submit_in s; u32 cmd[FAC_DEMO_DW]; } sp;
-    sp.s.handle = h;
-    sp.s.ndw = FAC_DEMO_DW;
-    sp.s.pad = 0;
-    u32 cmd[FAC_DEMO_DW] = { 1, 2, 3, 4 };
-    m_memcpy(sp.cmd, cmd, sizeof(cmd));
-    long r = lane ? gpu_lane_req(lane, MLGPU_SUBMIT, &sp, sizeof(sp))
-                  : gpu_dev_req(fd, MLGPU_SUBMIT, &sp, sizeof(sp));
-    if (r != sizeof(struct mlgpu_submit_out)) {
-        P("m11: submit ("); P(who); P("): FAIL r=");
-        print_dec_n(r);
-        P("\n");
-        return 1;
-    }
-    u64 fence;
-    m_memcpy(&fence, gpu_rbuf, sizeof(fence));
-    if (!fence) { P("m11: submit: нулевой забор\n"); return 1; }
-    P("m11: "); P(who); P(": fence=");
-    print_dec_n((long)fence);
-    P("\n");
-
-    struct mlgpu_wait_in w = { fence };
-    r = lane ? gpu_lane_req(lane, MLGPU_WAIT, &w, sizeof(w))
-             : gpu_dev_req(fd, MLGPU_WAIT, &w, sizeof(w));
-    if (r != sizeof(struct mlgpu_wait_out)) {
-        P("m11: wait ("); P(who); P("): FAIL r=");
-        print_dec_n(r);
-        P("\n");
-        return 1;
-    }
-    u32 signaled;
-    m_memcpy(&signaled, gpu_rbuf, 4);
-    if (signaled != 1) { P("m11: wait: забор не сигнален\n"); return 1; }
-
-    struct mlgpu_free_in f = { h };
-    r = lane ? gpu_lane_req(lane, MLGPU_FREE, &f, sizeof(f))
-             : gpu_dev_req(fd, MLGPU_FREE, &f, sizeof(f));
-    if (r != 0) { P("m11: free ("); P(who); P("): FAIL\n"); return 1; }
-    P("m11: "); P(who); P(": submit -> fence ");
-    print_dec_n((long)fence);
-    P(" -> signaled: OK\n");
-    return 0;
-}
-
-static int gpu_info_ok(long fd, long lane, const char *who) {
-    long r = lane ? gpu_lane_req(lane, MLGPU_INFO, 0, 0)
-                  : gpu_dev_req(fd, MLGPU_INFO, 0, 0);
-    if (r != sizeof(struct mlgpu_info_out)) {
-        P("m11: info ("); P(who); P("): FAIL (");
-        print_dec_n(r);
-        P(")\n");
-        return 1;
-    }
-    struct mlgpu_info_out o;
-    m_memcpy(&o, gpu_rbuf, sizeof(o));
-    if (m_strncmp(o.name, "amdgpu", 7) != 0 || o.api != MLGPU_API) {
-        P("m11: info ("); P(who); P("): чужой фасад\n");
-        return 1;
-    }
-    P("m11: info ("); P(who); P("): amdgpu api=");
-    print_dec_n(o.api);
-    P(" mode=");
-    print_dec_n(o.mode);
-    P(" fences=");
-    print_dec_n((long)o.fences);
-    P("\n");
-    return 0;
-}
-
-static int gpu_demo(void) {
-    // шина поднимается параллельно с демо (форк не гарантирует готовность)
-    for (int tries = 0; tries <= 200; tries++) {
-        gpu_bus = ml_connect("milin-bus");
-        if (gpu_bus >= 0) break;
-        sleep_ms(10);
-    }
-    if (gpu_bus < 0) {
-        P("m11: шина недоступна\n");
-        return 1;
-    }
-
-    // --- фаза kernel: запросный цикл в kthread домена ---
-    long fd = sys3(SYS_open, (long)"/dev/amdgpu", O_RDWR, 0);
-    if (fd < 0) {
-        P("m11: /dev/amdgpu: FAIL (фасад не зарегистрирован)\n");
-        return 1;
-    }
-    if (gpu_info_ok(fd, 0, "dev")) return 1;
-    struct mlgpu_alloc_in a = { 8192 };
-    long ar = gpu_dev_req(fd, MLGPU_ALLOC, &a, sizeof(a));
-    if (ar != sizeof(struct mlgpu_alloc_out)) {
-        P("m11: alloc (dev): FAIL r=");
-        print_dec_n(ar);
-        P("\n");
-        return 1;
-    }
-    u64 handle;
-    m_memcpy(&handle, gpu_rbuf, sizeof(handle));
-    if (gpu_cycle(fd, 0, handle)) return 1;
-    P("m11: placement=kernel: цикл GPU в kthread'е домена: OK\n");
-
-    // --- фаза user: домен уступает, протокол уезжает в gpud ---
-    if (gpu_placement("user\n", 5)) {
-        P("m11: placement=user: FAIL\n");
-        return 1;
-    }
-    struct mlgpu_alloc_in p = { 4096 };
-    if (gpu_dev_req(fd, MLGPU_ALLOC, &p, sizeof(p)) != -19 /*ENODEV*/) {
-        P("m11: placement=user: домен НЕ отклонил /dev-запрос — дыра!\n");
-        return 1;
-    }
-    P("m11: placement=user: домен отклоняет /dev-запросы (-ENODEV): OK\n");
-
-    long lane = gpu_lookup_lane();
-    if (lane < 0) {
-        P("m11: lookup \"gpu.amdgpu\": FAIL\n");
-        return 1;
-    }
-    if (gpu_info_ok(-1, lane, "lane")) return 1;
-    if (gpu_lane_req(lane, MLGPU_ALLOC, &p, sizeof(p))
-        != sizeof(struct mlgpu_alloc_out)) {
-        P("m11: alloc (lane): FAIL\n");
-        return 1;
-    }
-    m_memcpy(&handle, gpu_rbuf, sizeof(handle));
-    if (gpu_cycle(-1, lane, handle)) return 1;
-    P("m11: placement=user: цикл GPU у gpud через шину: OK\n");
-
-    // --- возврат в домен: /dev снова жив, gpud уступает ---
-    if (gpu_placement("kernel\n", 7)) {
-        P("m11: placement=kernel: FAIL\n");
-        return 1;
-    }
-    if (gpu_dev_req(fd, MLGPU_INFO, 0, 0) <= 0) {
-        P("m11: возврат в домен: /dev/amdgpu не ожил\n");
-        return 1;
-    }
-    if (gpu_info_ok(fd, 0, "dev")) return 1;
-    struct ml_msg q = { ML_PROTO_GPU, GPU_REQ, 0, 0, {0} };
-    u8 t = MLGPU_INFO;
-    if (ml_send(lane, &q, &t, 1, 0, 0) < 0 ||
-        ml_recv(lane, &q, 0, 0, 0) <= 0 ||
-        q.msg_id != GPU_REQ_R || q.err != ML_E_PERM) {
-        P("m11: placement=kernel: gpud НЕ уступил дорогу домену!\n");
-        return 1;
-    }
-    P("m11: placement=kernel: gpud уступил дорогу (ML_E_PERM): OK\n");
-    sys3(SYS_close, lane, 0, 0);
-    sys3(SYS_close, fd, 0, 0);
-    P("m11: mlkd-фасад amdgpu: один протокол, два размещения: OK\n");
-    return 0;
-}
-
 // --- M15: switch_root на постоянный ext4 (cmdline root=) ---
 // /init есть только в initramfs — его отсутствие = мы уже на реальном
 // корне (guard от повторного переезда у нового /sbin/init).
@@ -679,9 +463,9 @@ static int guid_parse(const char *s, u8 out[16]) {
         int h = hexval(s[0]), l = hexval(s[1]);
         if (h < 0 || l < 0) return 0;
         u8 b = (u8)(h * 16 + l);
-        if (f < 4) out[3 - f] = b;
-        else if (f < 6) out[9 - f] = b;
-        else if (f < 8) out[15 - f] = b;
+        if (f < 4) out[3 - f] = b;      // data1: LE
+        else if (f < 6) out[9 - f] = b; // data2: LE
+        else if (f < 8) out[13 - f] = b; // data3: LE
         else out[f] = b;
         s += 2;
         f++;
@@ -769,8 +553,11 @@ static int partuuid_resolve(const char *hex, char *out, int omax) {
             if (!disk_node_name(e->d_name)) continue;
             long pn = gpt_find_part(e->d_name, want);
             if (pn <= 0) continue;
+            // полный путь: mount(2) хочет "/dev/<узел>"
             int a = 0;
-            while (e->d_name[a] && a < omax - 4) { out[a] = e->d_name[a]; a++; }
+            for (const char *d = "/dev/"; *d; d++) out[a++] = *d;
+            int b = 0;
+            while (e->d_name[b] && a < omax - 4) out[a++] = e->d_name[b++];
             if (a && out[a - 1] >= '0' && out[a - 1] <= '9' && a < omax - 3)
                 out[a++] = 'p';
             char num[8];
@@ -1032,13 +819,9 @@ void milin_main(void) {
         sys3(SYS_exit, 1, 0, 0);
     }
 
-    // --- M11: mlkd-фасад amdgpu: user/kernel placement ---
-    if (gpu_demo()) {
-        P("M11 FAILED\n");
-        sys3(SYS_exit, 1, 0, 0);
-    }
-
     // --- reaper: wait4(-1) на любого ребёнка ---
+    // M22: GPU-фасад e2e ведёт /sbin/gputest (oneshot): kernel/user
+    // placement — политика клиента, /init placement не трогает
     int client_status = -1;
     for (;;) {
         int status = 0;
@@ -1051,7 +834,10 @@ void milin_main(void) {
         }
         struct svc *s = find_svc((int)r);
         if (!s) continue;
-        if (s->type == SVC_ONESHOT) s->done = 1;
+        if (s->type == SVC_ONESHOT) {
+            s->done = 1;
+            s->status = status;
+        }
 
         if (s->stopping) {
             // запланированная остановка — норма graceful shutdown
@@ -1132,6 +918,17 @@ void milin_main(void) {
     P("supervisor: клиент: ");
     if (client_ok) P("OK\n"); else P("FAIL\n");
 
+    // M22: вердикт фасада — по статусу oneshot'а gputest (в установленной
+    // системе /init тоже placement не трогает — один владелец)
+    int gpu_ok = 0;
+    for (int i = 0; i < nsvcs; i++)
+        if (m_strncmp(svcs[i].name, "gputest", 8) == 0 && svcs[i].done
+            && !died_by_signal(svcs[i].status)
+            && exit_code(svcs[i].status) == 0)
+            gpu_ok = 1;
+    P("supervisor: gpu e2e: ");
+    if (gpu_ok) P("OK\n"); else P("FAIL\n");
+
     int restarts_total = 0;
     for (int i = 0; i < nsvcs; i++) restarts_total += svcs[i].restarts;
     P("supervisor: перезапусков сервисов за сессию: ");
@@ -1146,7 +943,12 @@ void milin_main(void) {
         P("M7.2 OK: bus-death cascade restart\n");
         P("M8 OK: blob path for large messages + glibc userspace\n");
         P("M9 OK: kdriver domain — drivers between kernel and userspace\n");
+        if (!gpu_ok) {
+            P("M11 FAILED: gpu e2e клиент не прошёл\n");
+            sys3(SYS_exit, 1, 0, 0);
+        }
         P("M11 OK: mlkd amdgpu facade — one protocol, user/kernel placement\n");
+        P("M22 OK: gpu facade e2e — dev/lane cycles + deny paths (cap/placement)\n");
         // M10: amdgpu в ядре виден как built-in модуль в /sys/module/amdgpu
         {
             long fd = sys3(SYS_open, (long)"/sys/module/amdgpu", 0, 0);

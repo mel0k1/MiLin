@@ -1,0 +1,6 @@
+# M22: GPU-фасад amdgpu e2e — независимый клиент, kernel/user placement,
+# отказ-пути (домен уступил, capability world=0). Вердикт M11/M22 — по нему.
+name=gputest
+exec=/sbin/gputest
+type=oneshot
+order=92
