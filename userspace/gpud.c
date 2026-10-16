@@ -1,4 +1,4 @@
-// /sbin/gpud (M11): user-placement GPU-демон — вторая инкарнация фасада.
+// /sbin/gpud (M11/M22): user-placement GPU-демон — вторая инкарнация фасада.
 //
 // Пока домен держит amdgpu (placement=kernel), mlgpu-запросы обслуживает
 // kthread через /dev/amdgpu, а gpud на lane-запросы отвечает отказом
@@ -8,11 +8,17 @@
 // свой state. Где живёт запросный цикл, видно по /sys/class/mlkd/amdgpu/state
 // — gpud перечитывает его на каждый запрос и уступает дорогу домену.
 //
+// M22: lane может прийти с ареной bulk-слотов (ML_TR_BULK, 2 хука от шины:
+// lane + shm) — тогда SUBMITB несёт командный буфер в слоте: tail =
+// [op][submit_in], dwords в общей памяти, head h[0]=слот h[1]=байты.
+// Слот возвращается ДО ack (flow control, как LOG_WRITEB у log-сервера).
+//
 // Политика прав (M7): GPU — привилегированный ресурс, world не получает
 // lane вовсе (маска 0), root — полный.
 
 #include "milin.h"
 #include "ipc.h"
+#include "bulk.h"
 #include "mlgpu.h"
 
 #define GPU_WORLD 0
@@ -23,6 +29,7 @@
 #define FAC_SLOT_SIZE (1u << 20)
 #define FAC_HANDLE_MAGIC 0xfac00000ull
 #define FAC_MAX_DW 64
+#define FAC_MAX_DW_BULK (MLB_SLOT / 4)  // 32К dwords = слот арены целиком
 
 struct fac_state {
     u32 used[FAC_SLOTS];
@@ -40,8 +47,10 @@ static int fac_slot_of(u64 handle) {
     return h < FAC_SLOTS ? (int)h : -1;
 }
 
-// обработать mlgpu-запрос: in = [op][payload] -> ответ в out, длина или -код
-static long gpu_serve(const u8 *in, u32 inlen, u8 *out, u32 outmax) {
+// обработать mlgpu-запрос: in = [op][payload], cmd/cmdlen — командный
+// буфер (bulk-слот либо NULL); ответ в out, длина или -код
+static long gpu_serve(const u8 *in, u32 inlen, const u8 *cmd, u32 cmdlen,
+                      u8 *out, u32 outmax) {
     if (inlen < 1) return -1;
 
     switch (in[0]) {
@@ -89,6 +98,7 @@ static long gpu_serve(const u8 *in, u32 inlen, u8 *out, u32 outmax) {
     case MLGPU_SUBMIT: {
         struct mlgpu_submit_in s;
         struct mlgpu_submit_out o;
+        if (cmd) return -1;  // 'S' не несёт слота — это признак сломанного клиента
         if (inlen < 1 + sizeof(s) || outmax < sizeof(o)) return -1;
         m_memcpy(&s, in + 1, sizeof(s));
         u32 ndw = s.ndw < FAC_MAX_DW ? s.ndw : FAC_MAX_DW;
@@ -104,6 +114,29 @@ static long gpu_serve(const u8 *in, u32 inlen, u8 *out, u32 outmax) {
         }
         fst.fences++;
         o.fence = fst.fences;
+        m_memcpy(out, &o, sizeof(o));
+        return sizeof(o);
+    }
+    case MLGPU_SUBMITB: {
+        // bulk (M22): dwords в арене, tail — только заголовок; сумма в ответе
+        // — клиент сверяет с локальной (байты реально прошли через shm)
+        struct mlgpu_submit_in s;
+        struct mlgpu_submitb_out o;
+        if (!cmd) return -1;
+        if (inlen != 1 + sizeof(s) || outmax < sizeof(o)) return -1;
+        m_memcpy(&s, in + 1, sizeof(s));
+        if (!s.ndw || s.ndw > FAC_MAX_DW_BULK || cmdlen != s.ndw * 4) return -1;
+        int slot = fac_slot_of(s.handle);
+        if (slot < 0 || !fst.used[slot]) return -1;
+        u64 sum = 0;
+        for (u32 i = 0; i < s.ndw; i++) {
+            u32 dw;
+            m_memcpy(&dw, cmd + i * 4, 4);
+            sum += dw;
+        }
+        fst.fences++;
+        o.fence = fst.fences;
+        o.sum = sum;
         m_memcpy(out, &o, sizeof(o));
         return sizeof(o);
     }
@@ -134,8 +167,9 @@ static int placement_is_user(void) {
     return m_strncmp(b, "user", 4) == 0;
 }
 
-// --- lane поверх SOCK_SEQPACKET: GPU_REQ -> GPU_REQ_R ---
-static void serve_lane(long lane, u32 rights) {
+// --- lane поверх SOCK_SEQPACKET: GPU_REQ -> GPU_REQ_R; с ареной (M22)
+// SUBMITB читает dwords прямо из общего слота, слот отдаёт ДО ack
+static void serve_lane(long lane, u32 rights, struct mlb_hdr *ar) {
     ml_passcred(lane);
     for (;;) {
         struct ml_msg m;
@@ -149,6 +183,24 @@ static void serve_lane(long lane, u32 rights) {
         }
         if (m.proto != ML_PROTO_GPU || m.msg_id != GPU_REQ) continue;
 
+        // bulk-ссылка: h[0]=слот, h[1]=байты; валидность — до любых ответов
+        u32 slot = (u32)*ml_h(&m, 0);
+        u32 blen = (u32)*ml_h(&m, 1);
+        const u8 *cmd = 0;
+        if (slot) {
+            if (!ar || slot > MLB_NSLOTS || blen > MLB_SLOT) {
+                P("gpud: bulk: плохая ссылка (слот ");
+                print_dec_n(slot);
+                P(", len ");
+                print_dec_n(blen);
+                P(")\n");
+                struct ml_msg bad = { ML_PROTO_GPU, GPU_REQ_R, ML_E_IO, 0, {0} };
+                ml_send(lane, &bad, 0, 0, 0, 0);
+                continue;
+            }
+            cmd = mlb_ptr(ar, (int)slot);
+        }
+
         struct ml_msg resp = { ML_PROTO_GPU, GPU_REQ_R, ML_E_OK, 0, {0} };
         if (!(rights & ML_CAP_WRITE)) {
             resp.err = ML_E_PERM;
@@ -158,7 +210,8 @@ static void serve_lane(long lane, u32 rights) {
             resp.err = ML_E_PERM;
         } else {
             static u8 reply[ML_MAXTAIL];
-            long n = gpu_serve((u8 *)tail, m.tail_len, reply, sizeof(reply));
+            long n = gpu_serve((u8 *)tail, m.tail_len, cmd, cmd ? blen : 0,
+                               reply, sizeof(reply));
             if (n >= 0) {
                 resp.tail_len = (u32)n;
                 m_memcpy(tail, reply, (u32)n);
@@ -166,6 +219,9 @@ static void serve_lane(long lane, u32 rights) {
                 resp.err = ML_E_IO;
             }
         }
+        // слот возвращаем ДО ack: писатель возьмёт следующий payload из
+        // той же арены (иначе flow-control дедлок, как в helq)
+        if (cmd) mlb_give(ar, (int)slot);
         ml_send(lane, &resp, tail, resp.err == ML_E_OK ? resp.tail_len : 0, 0, 0);
     }
 }
@@ -228,7 +284,12 @@ void milin_main(void) {
         if (m2.proto == ML_PROTO_BUS && m2.msg_id == BUS_LANE_REQ && aux.nhooks >= 1) {
             u32 rights = 0;
             if (m2.tail_len >= 4) m_memcpy(&rights, req_tail, 4);
-            serve_lane(aux.hooks[0], rights);
+            // M22: ML_TR_BULK = 2 хука (lane + shm-арена); при отсутствии
+            // второго хука арена 0 — bulk-ссылки будут отбиты как ML_E_IO
+            struct mlb_hdr *ar = 0;
+            if (aux.nhooks >= 2 && aux.hooks[1] >= 0)
+                ar = mlb_map(aux.hooks[1]);
+            serve_lane(aux.hooks[0], rights, ar);
         }
     }
     sys3(SYS_exit, 0, 0, 0);

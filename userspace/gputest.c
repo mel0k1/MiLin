@@ -5,14 +5,20 @@
 //   deny   : placement=user -> /dev ALLOC = -ENODEV (домен уступил gpud)
 //   caps   : fork+setuid(1000): LOOKUP "gpu.amdgpu" = ML_E_PERM (world=0)
 //   user   : LOOKUP от root -> INFO/ALLOC/SUBMIT/WAIT/FREE у gpud
+//   bulk   : lane с ареной (ML_TR_BULK): SUBMITB 64КБ — командный буфер
+//            больше ML_MAXTAIL едет слотом арены, сумма dwords в ответе
+//            обязана сойтись с локальной (M22 GPU BULK OK)
 //   return : placement=kernel -> /dev ожил, gpud уступил (ML_E_PERM)
 // Шину клиент.c убивает в демо каскада M7.2 — каждая шинная фаза умеет
 // переподключиться и начаться заново.
-// Маркеры: M22 GPU DEV/DENYDEV/CAPDENY/LANE/RETURN OK, итог M22 GPU E2E OK.
+// Маркеры: M22 GPU DEV/DENYDEV/CAPDENY/LANE/BULK/RETURN OK, итог M22 GPU E2E OK.
 
 #include "milin.h"
 #include "ipc.h"
+#include "bulk.h"
 #include "mlgpu.h"
+
+#define BULK_NDW 16384  // 64КБ dwords — на порядок больше ML_MAXTAIL
 
 static char rbuf[512];
 
@@ -191,16 +197,152 @@ static int phase_lane(long bus, long *lane_out) {
     return 0;
 }
 
-// фаза return: домен вернул фасад — /dev ожил, gpud уступил (ML_E_PERM)
-static int phase_return(long fd, long lane) {
+// фаза bulk: lane с ареной (ML_TR_BULK) — SUBMITB 64КБ через общий слот.
+// 0 = OK; шинные проблемы ретраются снаружи
+static int phase_bulk(long bus) {
+    struct ml_msg q = { ML_PROTO_BUS, BUS_LOOKUP, 0, 0, {0} };
+    m_memcpy(q.head, "gpu.amdgpu", 11);
+    *ml_h(&q, 2) = ML_TR_BULK;
+    long lane = -1, shmfd = -1;
+    for (int tries = 0; tries < 100; tries++) {
+        if (ml_send(bus, &q, 0, 0, 0, 0) < 0) return 1;
+        struct ml_msg resp;
+        struct ml_aux aux;
+        if (ml_recv(bus, &resp, 0, 0, &aux) <= 0) return 1;
+        if (resp.err == ML_E_OK && aux.nhooks >= 2) {
+            lane = aux.hooks[0];
+            shmfd = aux.hooks[1];
+            break;
+        }
+        if (resp.err == ML_E_PERM) return 1;
+        sleep_ms(20);
+    }
+    if (lane < 0 || shmfd < 0) return 1;
+
+    struct mlb_hdr *ar = mlb_map(shmfd);
+    sys3(SYS_close, shmfd, 0, 0);
+    if (!ar) {
+        P("gputest: bulk: арена не разметана\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+
+    // INFO по bulk-lane: фасад жив и это gpud
+    if (!info_ok(-1, lane)) {
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+
+    struct mlgpu_alloc_in a = { (u64)BULK_NDW * 4 };
+    if (lane_req(lane, MLGPU_ALLOC, &a, sizeof(a))
+        != sizeof(struct mlgpu_alloc_out)) {
+        P("gputest: bulk: alloc FAIL\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    u64 h;
+    m_memcpy(&h, rbuf, sizeof(h));
+
+    // слот арены + паттерн: dwords 1..BULK_NDW, сумма известна заранее
+    int slot = mlb_take(ar, MLB_WAIT);
+    if (!slot) {
+        P("gputest: bulk: слот не выделен (арена молчит)\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    u32 *cw = mlb_ptr(ar, slot);
+    for (u32 i = 0; i < BULK_NDW; i++) cw[i] = i + 1;
+    u64 want = (u64)BULK_NDW * (BULK_NDW + 1) / 2;
+
+    // SUBMITB: tail = [op][submit_in], ссылка в head (h[0]=слот, h[1]=байты)
+    static u8 tb[1 + sizeof(struct mlgpu_submit_in)];
+    tb[0] = MLGPU_SUBMITB;
+    struct mlgpu_submit_in s = { h, BULK_NDW, 0 };
+    m_memcpy(tb + 1, &s, sizeof(s));
+    struct ml_msg rq = { ML_PROTO_GPU, GPU_REQ, 0, 0, {0} };
+    *ml_h(&rq, 0) = (u32)slot;
+    *ml_h(&rq, 1) = BULK_NDW * 4;
+    if (ml_send(lane, &rq, tb, sizeof(tb), 0, 0) < 0) {
+        P("gputest: bulk: send FAIL\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    struct ml_msg rp;
+    if (ml_recv(lane, &rp, rbuf, sizeof(rbuf), 0) <= 0
+        || rp.msg_id != GPU_REQ_R || rp.err != ML_E_OK
+        || rp.tail_len != sizeof(struct mlgpu_submitb_out)) {
+        P("gputest: bulk: ack FAIL\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    struct mlgpu_submitb_out so;
+    m_memcpy(&so, rbuf, sizeof(so));
+    if (!so.fence || so.sum != want) {
+        P("gputest: bulk: сумма dwords не сошлась (got ");
+        print_dec_n((long)so.sum);
+        P(", want ");
+        print_dec_n((long)want);
+        P(")\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+
+    // WAIT + FREE — малые запросы по тому же lane (head нулевой = не bulk)
+    struct mlgpu_wait_in w = { so.fence };
+    if (lane_req(lane, MLGPU_WAIT, &w, sizeof(w))
+        != sizeof(struct mlgpu_wait_out)) {
+        P("gputest: bulk: wait FAIL\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    u32 sig;
+    m_memcpy(&sig, rbuf, 4);
+    if (sig != 1) {
+        P("gputest: bulk: fence не взведён\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+    struct mlgpu_free_in f = { h };
+    if (lane_req(lane, MLGPU_FREE, &f, sizeof(f)) != 0) {
+        P("gputest: bulk: free FAIL\n");
+        sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+        sys3(SYS_close, lane, 0, 0);
+        return 1;
+    }
+
+    P("gputest: bulk: submit ");
+    print_dec_n(BULK_NDW * 4);
+    P(" байт через слот арены, sum сошлась, слот возвращён до ack\n");
+    sys6(SYS_munmap, (long)ar, MLB_SIZE, 0, 0, 0, 0);
+    sys3(SYS_close, lane, 0, 0);
+    P("M22 GPU BULK OK\n");
+    return 0;
+}
+
+// фаза return: домен вернул фасад — /dev ожил, gpud уступил (ML_E_PERM).
+// lane свежий: gpud однопоточный, serve_lane живёт до EOF — предыдущие
+// lane'ы обязаны быть закрыты (M22)
+static int phase_return(long fd, long bus) {
     if (gpu_place("kernel\n", 7)) return 1;
     if (!info_ok(fd, 0)) return 1;
+    long lane = lookup_gpu_lane(bus);
+    if (lane < 0) return 1;
     struct ml_msg q = { ML_PROTO_GPU, GPU_REQ, 0, 0, {0} };
     u8 t = MLGPU_INFO;
     if (ml_send(lane, &q, &t, 1, 0, 0) < 0) return 1;
     struct ml_msg resp;
     if (ml_recv(lane, &resp, 0, 0, 0) <= 0 || resp.msg_id != GPU_REQ_R
         || resp.err != ML_E_PERM) return 1;
+    sys3(SYS_close, lane, 0, 0);  // EOF: serve_lane вернётся в главный цикл
     P("M22 GPU RETURN OK\n");
     return 0;
 }
@@ -243,12 +385,24 @@ void milin_main(void) {
         if (bus < 0) sys3(SYS_exit, 1, 0, 0);
         P("gputest: lane: ретрай на новой шине\n");
     }
+    // gpud однопоточный: serve_lane живёт до EOF — освобождаем его
+    // для следующего lane'а (bulk-фазы), иначе дедлок на BUS_LANE_REQ
+    sys3(SYS_close, lane, 0, 0);
 
-    if (phase_return(fd, lane)) {
+    // M22: bulk-submit — командный буфер больше ML_MAXTAIL едет ареной
+    for (int attempt = 0;; attempt++) {
+        if (!phase_bulk(bus)) break;
+        if (attempt > 5) sys3(SYS_exit, 1, 0, 0);
+        sys3(SYS_close, bus, 0, 0);
+        bus = bus_conn();
+        if (bus < 0) sys3(SYS_exit, 1, 0, 0);
+        P("gputest: bulk: ретрай на новой шине\n");
+    }
+
+    if (phase_return(fd, bus)) {
         P("gputest: return: FAIL\n");
         sys3(SYS_exit, 1, 0, 0);
     }
-    sys3(SYS_close, lane, 0, 0);
     sys3(SYS_close, fd, 0, 0);
     P("M22 GPU E2E OK\n");
     sys3(SYS_exit, 0, 0, 0);
