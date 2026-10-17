@@ -1,5 +1,6 @@
 #!/bin/sh
-# test-realhw.sh (M14/M16/M18): бут-гейты реального железа.
+# test-realhw.sh (M14/M16/M18/M25): бут-гейты реального железа.
+# GATES="virtio,wifi-e2e" — прогнать только перечисленные гейты.
 set -e
 cd "$(dirname "$0")/.."
 export PATH=/home/z/my-project/root/usr/bin:$PATH
@@ -18,6 +19,12 @@ for R in root ../root; do
     fi
 done
 
+want_gates() {
+    [ -z "$GATES" ] && return 0
+    case ",$GATES," in *",$1,"*) return 0 ;; esac
+    return 1
+}
+
 DISK=build/realhw-disk.img
 rm -f "$DISK"
 truncate -s 64M "$DISK"
@@ -27,7 +34,9 @@ truncate -s 64M "$DISK"
 run_boot() {
     name="$1"; shift
     echo "== гейт: $name"
-    "$BIN" -m 512M $EXTRA -nographic -no-reboot \
+    # BTMO: потолок бута (сек); маркеры гейта появляются в первые ~2 минуты,
+    # хвост демо (бенчи в TCG) в вердикт не входит
+    timeout "${BTMO:-360}" "$BIN" -m 512M $EXTRA -nographic -no-reboot \
         -kernel build/bzImage -initrd build/initramfs.cpio.gz \
         -append "console=ttyS0 panic=-1 memmap=4M\$0x8000000 ${APPEND_EXTRA:-}" \
         "$@" < /dev/null > "build/realhw-$name.log" || true
@@ -42,21 +51,29 @@ run_boot() {
 }
 
 FAIL=0
+
+if want_gates virtio; then
 run_boot virtio \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" || FAIL=1
+fi
 
+if want_gates ahci; then
 run_boot ahci \
     -machine pc-q35-2.9 -smp 4 -device virtio-rng-pci \
     -device ich9-ahci,id=ahci -device ide-hd,drive=d1,bus=ahci.0 -drive id=d1,if=none,format=raw,file="$DISK" || FAIL=1
+fi
 
+if want_gates nvme; then
 run_boot nvme \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
     -drive id=d2,if=none,format=raw,file="$DISK" \
     -device nvme,drive=d2,serial=MILIN01 || FAIL=1
+fi
 
+if want_gates nic-e1000e; then
 run_boot nic-e1000e \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -68,7 +85,9 @@ else
     echo "   e1000e FAIL — DHCP не поднялся"
     FAIL=1
 fi
+fi
 
+if want_gates usb-xhci; then
 run_boot usb-xhci \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -80,7 +99,9 @@ else
     echo "   usb-xhci FAIL — usbhid не поднял клавиатуру"
     FAIL=1
 fi
+fi
 
+if want_gates usb-uhci; then
 run_boot usb-uhci \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -92,10 +113,13 @@ else
     echo "   usb-uhci FAIL — usbhid не поднял клавиатуру"
     FAIL=1
 fi
+fi
 
-APPEND_EXTRA="no=uiod" run_boot net-mltap \
+if want_gates net-mltap; then
+APPEND_EXTRA="no=uiod no=xbpstest no=netclient" run_boot net-mltap \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
     -device virtio-net-pci,netdev=net0 -netdev user,id=net0 || FAIL=1
 if grep -q "DHCP OK" build/realhw-net-mltap.log; then
     echo "   net-mltap: DHCP через /dev/mltap (kernel-netdev) OK"
@@ -103,17 +127,38 @@ else
     echo "   net-mltap FAIL — DHCP не поднялся"
     FAIL=1
 fi
+fi
 
+if want_gates wifi-stack; then
 run_boot wifi-stack \
     -machine pc-i440fx-2.5 -smp 4 \
-    -device virtio-rng-pci || FAIL=1
+    -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" || FAIL=1
 if grep -q "cfg80211" build/realhw-wifi-stack.log && grep -q "mltap: готов" build/realhw-wifi-stack.log; then
     echo "   wifi-stack: cfg80211+mac80211+ath9k в ядре, /dev/mltap готов"
 else
     echo "   wifi-stack FAIL — wireless-стек не поднялся"
     FAIL=1
 fi
+fi
 
+if want_gates wifi-e2e; then
+APPEND_EXTRA="wifi=e2e no=netd no=uiod" run_boot wifi-e2e \
+    -machine pc-i440fx-2.5 -smp 4 \
+    -device virtio-rng-pci \
+    -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
+    -device virtio-net-pci,netdev=net0 -netdev user,id=net0 || FAIL=1
+if grep -q "WIFI E2E OK assoc" build/realhw-wifi-e2e.log \
+   && grep -q "WIFI E2E OK dhcp" build/realhw-wifi-e2e.log; then
+    echo "   wifi-e2e: hwsim AP+STA — wpa_supplicant WPA2-PSK assoc + udhcpc"
+else
+    echo "   wifi-e2e FAIL — хвост лога:"
+    tr -d '\000' < build/realhw-wifi-e2e.log | tail -15
+    FAIL=1
+fi
+fi
+
+if want_gates vga; then
 "$BIN" -m 512M $EXTRA -no-reboot -vga std -display none -serial stdio \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -127,6 +172,7 @@ else
     echo "== гейт: vga FAIL (консоль не поднялась)"
     FAIL=1
 fi
+fi
 
 OVMF_CODE=""
 OVMF_VARS=""
@@ -137,7 +183,7 @@ for R in root ../root; do
         break
     fi
 done
-if [ -n "$OVMF_CODE" ]; then
+if [ -n "$OVMF_CODE" ] && want_gates efifb; then
     echo "== гейт: efifb (OVMF, UEFI Class 3)"
     cp "$OVMF_VARS" build/realhw-efifb-vars.fd
     "$BIN" -m 512M $EXTRA -no-reboot \
@@ -162,10 +208,11 @@ if [ -n "$OVMF_CODE" ]; then
         tr -d '\000' < build/realhw-efifb.log | tail -12
         FAIL=1
     fi
-else
+elif [ -z "$OVMF_CODE" ]; then
     echo "== гейт: efifb ПРОПУЩЕН — нет OVMF.fd в тулчейне"
 fi
 
+if want_gates psmouse; then
 run_boot psmouse \
     -machine pc-i440fx-2.5 -smp 4 \
     -device virtio-rng-pci \
@@ -176,7 +223,9 @@ else
     echo "   psmouse FAIL — AUX-мышь не поднялась"
     FAIL=1
 fi
+fi
 
+if want_gates usb-storage; then
 UDISK=build/realhw-usbdisk.img
 rm -f "$UDISK"
 truncate -s 32M "$UDISK"
@@ -193,6 +242,7 @@ else
     echo "   usb-storage FAIL — хвост лога:"
     tr -d '\000' < build/realhw-usb-storage.log | tail -8
     FAIL=1
+fi
 fi
 
 [ "$FAIL" = 0 ] && echo "REALHW GATES OK"
