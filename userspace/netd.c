@@ -211,6 +211,7 @@ static int arp_get(u32 ip, u8 *out) {
         m_memset(a + 18, 0, 6);
         wbe32(a + 24, ip);
         nic_tx_commit((u32)(ETH_HDR + 28));
+        { char d[] = "netd-dbg: arp-req out\n"; sys3(SYS_write, 1, (long)d, sizeof(d)-1); }
     }
     return -1;
 }
@@ -221,6 +222,7 @@ static void arp_input(const u8 *p, u32 n) {
     u32 spa = rbe32(p + 14);
     if (spa && addr_set && (spa & NET_MASK) == (NET_MY_IP & NET_MASK)) {
         ac_ip = spa; m_memcpy(ac_mac, p + 8, 6); ac_ok = 1;
+        { char d[] = "netd-dbg: arp learned\n"; sys3(SYS_write, 1, (long)d, sizeof(d)-1); }
     }
     if (oper == 1 && addr_set && rbe32(p + 24) == NET_MY_IP) {
         u8 *f = tx_frame();
@@ -1000,7 +1002,7 @@ static int mltap_init(long _uio) {
         P("netd: /dev/mltap нет\n");
         return -1;
     }
-    static const char *cand[] = { "wlan0", "wlan1", "eth0", "eth1", 0 };
+    static const char *cand[] = { "eth0", "eth1", "wlan0", "wlan1", 0 };
     static char ib[16];
     int ok = -1;
     for (int k = 0; cand[k]; k++) {
@@ -1205,6 +1207,7 @@ static void sk_connect(struct lane *ln, u32 sid, u32 rip, u16 rport) {
     s->snd_una = s->iss;
     s->state = SS_SYN;
     syn_tx(s);
+    { char d[] = "netd-dbg: connect -> syn queued\n"; sys3(SYS_write, 1, (long)d, sizeof(d)-1); }
     seg_queue(s, 0, 0, F_SYN);                 // SYN в ретрансмиссии (ARP/потери)
     P("netd: CONNECT sid="); print_dec_n((long)sid);
     P(" ip="); print_hex_flat(rip);

@@ -14,6 +14,7 @@
 struct svc {
     char name[16];
     char exec[32];
+    char require[16];
     u8 type, stop;
     int order;
     int pid;
@@ -62,6 +63,8 @@ static void parse_line(struct svc *s, const char *key, const char *val) {
         s->stop = m_strncmp(val, "umount", 7) == 0 ? SVC_STOP_UMOUNT : SVC_STOP_TERM;
     else if (m_strncmp(key, "order", 6) == 0)
         s->order = parse_dec(val);
+    else if (m_strncmp(key, "require", 8) == 0)
+        copy_field(s->require, val, sizeof(s->require));
 }
 
 static void load_svc(const char *fn) {
@@ -200,12 +203,34 @@ static int svc_disabled(const char *name) {
     return 0;
 }
 
+static int cmdline_has(const char *tok) {
+    long fd = sys3(SYS_open, (long)"/proc/cmdline", O_RDONLY, 0);
+    if (fd < 0) return 0;
+    static char b[512];
+    long n = sys3(SYS_read, fd, (long)b, sizeof(b) - 1);
+    sys3(SYS_close, fd, 0, 0);
+    if (n <= 0) return 0;
+    b[n] = 0;
+    for (long i = 0; i + 1 < n; i++) {
+        if (i > 0 && b[i - 1] != ' ' && b[i - 1] != '\n') continue;
+        long j = i;
+        int k = 0;
+        while (tok[k] && b[j] == tok[k]) { k++; j++; }
+        if (tok[k] == 0 && (b[j] == '=' || b[j] == ' ' || b[j] == '\n')) return 1;
+    }
+    return 0;
+}
+
 static int spawn_svc(struct svc *s) {
     if (svc_disabled(s->name)) {
         P("supervisor: ");
         print_str(s->name);
         P(": выключен (no=)\n");
         s->pid = -1;
+        return -1;
+    }
+    if (s->require[0] && !cmdline_has(s->require)) {
+        s->pid = -1;                     // оптин не задан — тихо пропускаем
         return -1;
     }
     s->pid = spawn(s->exec, s->name);
@@ -905,6 +930,9 @@ void milin_main(void) {
                 P("kdrv: amdgpu нет в ядре (diet-сборка) — норма\n");
             }
         }
+        // чистый S5: panic-ребут глотает хвост UART-буфера
+        sys3(162, 0, 0, 0);                        // sync
+        sys6(169, 0xfee1dead, 672274793, 0x4321fedc, 0, 0, 0);
         sys3(SYS_exit, 0, 0, 0);
     }
     P("M9 FAILED\n");

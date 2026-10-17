@@ -1,0 +1,7 @@
+# wifi: wpa_supplicant + udhcpc на wlan*; стартует только с cmdline-флагом
+name=wifi
+exec=/sbin/wifi
+type=service
+stop=term
+order=45
+require=wifi

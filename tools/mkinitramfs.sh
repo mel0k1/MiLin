@@ -38,6 +38,20 @@ for d in build/void/ex/*/; do
     cp -a "$d/." $R/
     rm -f $R/props.plist $R/files.plist
 done
+# M25: прошивки iwlwifi/rtw88 -> usr/lib/firmware (lib позже симлинк на usr/lib)
+sh tools/get-firmware.sh
+mkdir -p $R/usr/lib/firmware
+cp -a build/firmware/. $R/usr/lib/firmware/
+# M25: wifi-оверлей — STA-конфиг, /sbin/wifi, udhcpc-хук
+mkdir -p $R/etc/wpa_supplicant
+printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n  ssid="MiLin-AP"\n  psk="milinpass"\n}\n' > $R/etc/wpa_supplicant/wpa_supplicant.conf
+cp userspace/wifi.sh $R/sbin/wifi
+cp userspace/udhcpc.script $R/sbin/udhcpc.script
+chmod 755 $R/sbin/wifi $R/sbin/udhcpc.script
+# M25: busybox-апплеты для shell-скриптов гостя (wifi, udhcpc-хук)
+for a in mkdir ifconfig ip ping cut sleep basename grep cat tr ln rm cp tail head wc ls; do
+    ln -sf busybox $R/usr/bin/$a
+done
 mkdir -p $R/bin
 cp /bin/sh $R/bin/sh
 rm -rf $R/lib64 $R/lib
@@ -47,6 +61,9 @@ build/void/ex/glibc-2.41_1/usr/bin/ldconfig -r "$PWD/$R" 2>/dev/null || true
 ls -la $R/etc/ld.so.cache
 printf 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n' > $R/etc/passwd
 printf 'root:x:0:\nuser:x:1000:\n' > $R/etc/group
+# nobody: dnsmasq роняет права на него по умолчанию
+printf 'nobody:x:65534:65534:nobody:/var/empty:/sbin/nologin\n' >> $R/etc/passwd
+printf 'nobody:x:65534:\n' >> $R/etc/group
 mkdir -p $R/home/user
 printf 'root:%s:19800:0:99999:7:::\nuser:%s:19800:0:99999:7:::\n' \
     "$(openssl passwd -6 -salt MiLinR00t milin)" \
@@ -60,7 +77,8 @@ cp $R/usr/share/ca-certificates/mozilla/*.crt $R/etc/ssl/certs/
 ln -sfn certs/ca-certificates.crt $R/etc/ssl/cert.pem
 openssl rehash "$PWD/$R/etc/ssl/certs" 2>/dev/null || true
 ls $R/etc/ssl/certs | head -3
-printf 'nameserver 1.1.1.1\n' > $R/etc/resolv.conf
+# DNS гостя = DNS хоста (slirp-пасsthrough; в изолированных средах 1.1.1.1 мёртв)
+cp /etc/resolv.conf $R/etc/resolv.conf 2>/dev/null || printf 'nameserver 1.1.1.1\n' > $R/etc/resolv.conf
 mkdir -p $R/etc/xbps.d
 echo "repository=https://repo-default.voidlinux.org/current" > $R/etc/xbps.d/00-repository-main.conf
 echo "repository=https://repo-default.voidlinux.org/current" > $R/etc/xbps.d/00-repo.conf
