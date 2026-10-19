@@ -46,10 +46,11 @@ cp -a build/firmware/. $R/usr/lib/firmware/
 mkdir -p $R/etc/wpa_supplicant
 printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n  ssid="MiLin-AP"\n  psk="milinpass"\n}\n' > $R/etc/wpa_supplicant/wpa_supplicant.conf
 cp userspace/wifi.sh $R/sbin/wifi
+cp userspace/lo-up.sh $R/sbin/lo-up
 cp userspace/udhcpc.script $R/sbin/udhcpc.script
-chmod 755 $R/sbin/wifi $R/sbin/udhcpc.script
+chmod 755 $R/sbin/wifi $R/sbin/lo-up $R/sbin/udhcpc.script
 # M25: busybox-апплеты для shell-скриптов гостя (wifi, udhcpc-хук)
-for a in mkdir ifconfig ip ping cut sleep basename grep cat tr ln rm cp tail head wc ls; do
+for a in mkdir ifconfig ip ping udhcpc cut sleep basename grep cat tr ln rm cp tail head wc ls; do
     ln -sf busybox $R/usr/bin/$a
 done
 mkdir -p $R/bin
