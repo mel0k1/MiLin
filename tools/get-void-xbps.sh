@@ -13,7 +13,8 @@ ARCH=x86_64
 PKGS="xbps libxbps libarchive libcrypto3 libssl3 openssl zlib libzstd \
 liblzma liblz4 bzip2 acl attr glibc ca-certificates xbps-triggers \
 e2fsprogs e2fsprogs-libs syslinux libblkid libuuid util-linux-common libsmartcols \
-wpa_supplicant libnl3 dbus-libs libreadline8 ncurses-libs busybox iw"
+wpa_supplicant libnl3 dbus-libs libreadline8 ncurses-libs busybox iw dnsmasq \
+libidn2 nettle gmp libunistring"
 
 IDX="$V/repodata-$ARCH.cache"
 need=1

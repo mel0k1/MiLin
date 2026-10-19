@@ -149,8 +149,9 @@ APPEND_EXTRA="wifi=e2e no=netd no=uiod" run_boot wifi-e2e \
     -device virtio-blk,drive=d0 -drive id=d0,if=none,format=raw,file="$DISK" \
     -device virtio-net-pci,netdev=net0 -netdev user,id=net0 || FAIL=1
 if grep -q "WIFI E2E OK assoc" build/realhw-wifi-e2e.log \
-   && grep -q "WIFI E2E OK dhcp" build/realhw-wifi-e2e.log; then
-    echo "   wifi-e2e: hwsim AP+STA — wpa_supplicant WPA2-PSK assoc + udhcpc"
+   && grep -q "WIFI E2E OK dhcp" build/realhw-wifi-e2e.log \
+   && grep -q "WIFI E2E OK ping" build/realhw-wifi-e2e.log; then
+    echo "   wifi-e2e: hwsim AP+STA — assoc + udhcpc + ICMP ping"
 else
     echo "   wifi-e2e FAIL — хвост лога:"
     tr -d '\000' < build/realhw-wifi-e2e.log | tail -15
