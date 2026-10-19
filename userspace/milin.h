@@ -75,6 +75,11 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f) {
 #define SYS_ioctl     16
 #define SYS_dup2      33
 #define SYS_umask     95
+#define SYS_socket    41
+#define SYS_sendto    44
+#define SYS_recvfrom  45
+#define SYS_bind      49
+#define SYS_setsockopt 54
 #define SYS_gettimeofday 96
 #define SYS_setgid    106
 #define SYS_setsid    112

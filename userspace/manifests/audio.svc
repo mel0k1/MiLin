@@ -1,0 +1,6 @@
+# audio: aplay через ALSA; стартует только с cmdline-флагом audio
+name=audio
+exec=/sbin/audiotest
+type=oneshot
+order=60
+require=audio

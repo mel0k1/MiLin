@@ -9,7 +9,7 @@
 #define SVC_ONESHOT 1
 #define SVC_STOP_TERM   0
 #define SVC_STOP_UMOUNT 1
-#define SVC_MAX 16
+#define SVC_MAX 24
 
 struct svc {
     char name[16];
@@ -231,6 +231,7 @@ static int spawn_svc(struct svc *s) {
     }
     if (s->require[0] && !cmdline_has(s->require)) {
         s->pid = -1;                     // оптин не задан — тихо пропускаем
+        if (s->type == SVC_ONESHOT) s->done = 1; // не блокировать финал
         return -1;
     }
     s->pid = spawn(s->exec, s->name);

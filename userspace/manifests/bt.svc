@@ -1,0 +1,6 @@
+# bt: BT-стек e2e поверх /dev/vhci; стартует только с cmdline-флагом bt
+name=bt
+exec=/sbin/btgate
+type=oneshot
+order=61
+require=bt
