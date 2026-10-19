@@ -31,6 +31,8 @@ chmod 4755 $R/sbin/passwd
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/last userspace/last.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/who userspace/who.c
 gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/gputest userspace/gputest.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/btvhid userspace/btvhid.c
+gcc -static -nostdlib -ffreestanding -O2 -o $R/sbin/bttest userspace/bttest.c
 
 sh tools/get-void-xbps.sh
 for d in build/void/ex/*/; do
@@ -48,9 +50,21 @@ printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n  ssid="MiLin-AP"\n  psk=
 cp userspace/wifi.sh $R/sbin/wifi
 cp userspace/lo-up.sh $R/sbin/lo-up
 cp userspace/udhcpc.script $R/sbin/udhcpc.script
-chmod 755 $R/sbin/wifi $R/sbin/lo-up $R/sbin/udhcpc.script
-# M25: busybox-апплеты для shell-скриптов гостя (wifi, udhcpc-хук)
-for a in mkdir ifconfig ip ping udhcpc cut sleep basename grep cat tr ln rm cp tail head wc ls; do
+cp userspace/audio.sh $R/sbin/audiotest
+cp userspace/btgate.sh $R/sbin/btgate
+chmod 755 $R/sbin/wifi $R/sbin/lo-up $R/sbin/udhcpc.script $R/sbin/audiotest $R/sbin/btgate
+# M27: тестовый wav (440Гц, 1с, стерео 48к) — гость играет его в hda-duplex
+mkdir -p $R/usr/share/snd
+python3 - <<'PYEOF'
+import math, wave, struct
+w = wave.open("build/rootfs/usr/share/snd/test.wav", "w")
+w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+w.writeframes(b"".join(struct.pack("<hh", int(12000 * math.sin(2 * math.pi * 440 * t / 48000)), int(12000 * math.sin(2 * math.pi * 440 * t / 48000))) for t in range(48000)))
+w.close()
+print("test.wav: ok")
+PYEOF
+# M25: busybox-апплеты для shell-скриптов гостя (wifi, udhcpc-хук, btgate)
+for a in mkdir ifconfig ip ping udhcpc cut sleep basename grep cat tr ln rm cp tail head wc ls kill; do
     ln -sf busybox $R/usr/bin/$a
 done
 mkdir -p $R/bin
